@@ -5,6 +5,7 @@ import { NavLink, Outlet, useLocation } from "react-router-dom";
 
 import logoUrl from "../assets/logo.png";
 import { useWorkspaceMotion } from "../animations/pageMotion";
+import { BRAND_LOGO_ALT, BRAND_NAME } from "../config/brand";
 import { useAuth } from "../features/auth/AuthContext";
 import { getVisibleNavigationItems } from "../features/navigation/navigation";
 
@@ -43,8 +44,8 @@ export function AppLayout() {
     <div className="workspace-layout" data-path={location.pathname}>
       <header className="mobile-topbar">
         <div className="mobile-brand">
-          <img className="brand-logo" src={logoUrl} alt="MultiChatEval 标志" />
-          <strong>MultiChatEval</strong>
+          <img className="brand-logo" src={logoUrl} alt={BRAND_LOGO_ALT} />
+          <strong>{BRAND_NAME}</strong>
         </div>
         <Button
           aria-label="打开导航"
@@ -54,9 +55,9 @@ export function AppLayout() {
       </header>
       <aside className="sidebar">
         <div className="brand-block">
-          <img className="brand-logo" src={logoUrl} alt="MultiChatEval 标志" />
+          <img className="brand-logo" src={logoUrl} alt={BRAND_LOGO_ALT} />
           <div>
-            <p className="eyebrow">MultiChatEval React</p>
+            <p className="eyebrow">{BRAND_NAME}</p>
             <h1 className="layout-title">多模型评测</h1>
           </div>
         </div>
@@ -70,7 +71,7 @@ export function AppLayout() {
       </main>
       <Drawer
         className="mobile-nav-drawer"
-        title="MultiChatEval"
+        title={BRAND_NAME}
         placement="right"
         size="default"
         open={mobileNavOpen}

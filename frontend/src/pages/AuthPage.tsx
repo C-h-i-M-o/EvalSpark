@@ -4,6 +4,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { ApiError } from "../api/client";
 import { useAuthMotion } from "../animations/pageMotion";
 import logoUrl from "../assets/logo.png";
+import { BRAND_LOGO_ALT, BRAND_NAME } from "../config/brand";
 import { useAuth } from "../features/auth/AuthContext";
 
 export function AuthPage({ mode }: { mode: "login" | "register" }) {
@@ -72,9 +73,9 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
     <main className="auth-shell">
       <section ref={cardRef} className="auth-card">
         <div className="auth-brand">
-          <img className="brand-logo auth-logo" src={logoUrl} alt="MultiChatEval 标志" />
+          <img className="brand-logo auth-logo" src={logoUrl} alt={BRAND_LOGO_ALT} />
           <div>
-            <p className="eyebrow">MultiChatEval React</p>
+            <p className="eyebrow">{BRAND_NAME}</p>
             <h1>{isRegister ? "注册账号" : "登录系统"}</h1>
           </div>
         </div>
