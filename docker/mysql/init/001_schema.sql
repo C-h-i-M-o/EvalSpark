@@ -166,3 +166,13 @@ CREATE TABLE IF NOT EXISTS token_usage_logs (
   CONSTRAINT fk_token_usage_logs_response FOREIGN KEY (response_id) REFERENCES model_responses(id),
   CONSTRAINT fk_token_usage_logs_model_config FOREIGN KEY (model_config_id) REFERENCES model_configs(id) ON DELETE SET NULL
 );
+
+-- 上述初始化结构对应此 Alembic 基线，后续版本统一交给迁移容器升级。
+CREATE TABLE IF NOT EXISTS alembic_version (
+  version_num VARCHAR(32) NOT NULL,
+  CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)
+);
+
+INSERT INTO alembic_version (version_num)
+SELECT '20260612_01'
+WHERE NOT EXISTS (SELECT 1 FROM alembic_version);

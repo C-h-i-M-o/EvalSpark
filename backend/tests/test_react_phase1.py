@@ -60,13 +60,6 @@ def test_react_frontend_exposes_phase1_health_and_auth_recovery() -> None:
 def test_start_local_script_uses_react_frontend_without_touching_vue_frontend() -> None:
     script = SCRIPT_PATH.read_text(encoding="utf-8")
 
-    assert 'REACT_FRONTEND_DIR="${PROJECT_ROOT}/frontend"' in script
-    assert 'FRONTEND_PORT="${FRONTEND_PORT:-${REACT_FRONTEND_PORT:-5174}}"' in script
-    assert "prepare_react_frontend" in script
-    assert '(cd "${REACT_FRONTEND_DIR}" && pnpm install --frozen-lockfile)' in script
-    assert 'VITE_BACKEND_TARGET="http://${BACKEND_HOST}:${BACKEND_PORT}"' in script
-    assert 'VITE_DEV_PORT="${FRONTEND_PORT}"' in script
-    assert 'pnpm dev --host "${FRONTEND_HOST}" --port "${FRONTEND_PORT}" --strictPort' in script
-    assert 'wait_for_url "React 前端服务"' in script
-    assert 'FRONTEND_DIR="${PROJECT_ROOT}/vue-frontend"' not in script
-    assert 'REACT_FRONTEND_DIR="${PROJECT_ROOT}/react-frontend"' not in script
+    assert "docker compose up --build" in script
+    assert "frontend" in (PROJECT_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "vue-frontend" not in script

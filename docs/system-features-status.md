@@ -661,14 +661,14 @@ final =
 
 已有能力：
 
-- `docker-compose.yml` 提供 MySQL 服务。
-- `scripts/start-local.ps1` 默认读取根目录 `.env` 并连接 Windows 本地 MySQL；传入 `-DatabaseMode Docker` 时仍可启动 Docker MySQL。
-- `scripts/start-local.sh` 可自动准备 `.env`、启动 MySQL、安装依赖、执行 Alembic 数据库迁移，并启动后端和 React 主前端开发服务。
+- `docker-compose.yml` 统一提供 `mysql`、`migrate`、`backend` 和 `frontend` 四个开发服务，并通过健康状态控制启动顺序。
+- `scripts/start-local.ps1` 与 `scripts/start-local.sh` 都只依赖 Docker Desktop 和 Docker Compose，可校验 `.env` 后构建并启动完整 React 主前端全栈环境。
+- MySQL 只开放 Compose 内部端口，数据保存在 `mysql_data`；Alembic 迁移成功后后端才启动，后端健康后前端才启动。
+- 后端与 React 前端均挂载本地源码并保留热更新；Python 依赖位于镜像中，前端依赖位于 `frontend_node_modules` 命名卷中。
 - `scripts/start-local-vue.sh` 可自动准备 `.env`、启动 MySQL、安装依赖、执行 Alembic 数据库迁移，并启动后端和历史 Vue 前端开发服务。
 - `scripts/verify-react-rewrite.sh` 可统一执行后端测试、React 测试、React 构建、Vue 测试、Vue 构建和 `git diff --check`。
-- 启动脚本会在默认端口被占用时自动向后寻找可用端口，并把实际后端地址传给 Vite 代理。
-- 后端可通过 `uvicorn app.main:app --reload` 启动。
-- React 前端可在 `frontend/` 下通过 `pnpm dev` 启动，默认端口为 `5174`；`frontend/pnpm-workspace.yaml` 固定 `picomatch@4.0.4`，避免新版 pnpm minimum release age 策略拦截刚发布的传递依赖。
+- 后端宿主机端口默认为 `8000`，React 前端默认为 `5174`；可由 `.env` 显式覆盖，端口冲突时不会自动漂移。
+- React 前端通过 `frontend/pnpm-workspace.yaml` 固定 `picomatch@4.0.4`，避免依赖解析漂移。
 - 历史 Vue 前端可在 `vue-frontend/` 下通过 `pnpm dev` 启动；`vue-frontend/pnpm-workspace.yaml` 的 `onlyBuiltDependencies` 已允许 `esbuild`、`vue-demi` 执行 pnpm 10 必要的依赖构建脚本。
 - 前端通过 Vite 代理或同源 `/api` 访问后端接口。
 
@@ -732,7 +732,7 @@ v2 新功能开发已结束，React 已完成对原 Vue 前端的功能替代。
 
 1. 后续新功能、样式优化和交互修复默认修改 `frontend/`。
 2. `vue-frontend/` 仅作为历史版本保留，默认不再承接新功能。
-3. Windows 开发环境启动 React 主前端使用 `.\scripts\start-local.ps1`；macOS 或 Linux 使用 `./scripts/start-local.sh`。
+3. Windows 开发环境使用 `.\scripts\start-local.ps1`，macOS 或 Linux 使用 `./scripts/start-local.sh`；两者都启动完整 Docker Compose 开发栈。
 4. 启动历史 Vue 版本使用 `./scripts/start-local-vue.sh`。
 5. React 主前端验收继续使用 `scripts/verify-react-rewrite.sh`，该脚本仍会检查 Vue 历史版本是否被无意破坏。
 6. 后续如要移除 Vue 前端，需要单独任务决策。

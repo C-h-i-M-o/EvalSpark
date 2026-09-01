@@ -20,7 +20,7 @@ MultiChatEval 是一个“面向多模型问答的对话质量评估系统”。
 - 当前主前端：React 19、TypeScript、Vite、React Router、Tailwind CSS、Ant Design、Recharts、GSAP，独立目录 `frontend/` 并复用现有后端 API
 - 历史前端：Vue 3、JavaScript、Vite、Pinia、Vue Router、Axios、Element Plus、Markdown-it、DOMPurify、GSAP，位于 `vue-frontend/`，后续不再作为主要开发目标
 - 数据库：MySQL 8
-- Windows 开发数据库：本地 MySQL 8；Docker Compose 数据库部署继续保留
+- 开发环境：Docker Compose 统一运行 MySQL、Alembic 迁移、FastAPI 后端和 React/Vite 前端
 - 包管理：前端优先使用 pnpm
 
 注意：当前主前端使用 React + TypeScript。历史 Vue 前端使用 JavaScript，不作为后续新功能开发目标。
@@ -128,105 +128,46 @@ MultiChatEval/
     - `docs/database.md`
     - `docs/api.md`
     - `docs/open-source-reuse.md`
+    - `docs/docker-development-spec-plan.md`
     - `docs/react-rewrite/`
     - `docs/legacy-v2/`
 
 ## 本地运行方式
 
-Windows 开发环境推荐在 PowerShell 中使用一键启动脚本，默认连接根目录 `.env` 配置的本地 MySQL：
+默认开发环境只依赖 Docker Desktop 与 Docker Compose。MySQL、Alembic 迁移、FastAPI 后端和 React/Vite 前端全部在容器中运行，Windows 与 macOS/Linux 使用同一套 Compose 定义。
+
+Windows PowerShell：
 
 ```powershell
 .\scripts\start-local.ps1
 ```
 
-macOS 或 Linux 继续使用：
+macOS 或 Linux：
 
 ```bash
 ./scripts/start-local.sh
 ```
 
-Windows 脚本会检查 `.env` 和本地 MySQL 端口，不会启动或修改 Windows MySQL 服务；随后准备后端虚拟环境和 React 前端依赖、执行 Alembic 数据库迁移，并同时启动后端与 React 主前端开发服务。如需临时使用 Docker MySQL，可传入 `-DatabaseMode Docker`。默认 React 前端地址为 `http://127.0.0.1:5174`；如端口占用，会自动向后寻找可用端口。按 `Ctrl+C` 可停止本次启动的前后端服务。
+两个脚本都会检查根目录 `.env`、Docker daemon 和 Compose 配置，再执行 `docker compose up --build`。默认 React 前端地址为 `http://127.0.0.1:5174`，后端健康检查为 `http://127.0.0.1:8000/api/health`；端口可通过 `.env` 的 `FRONTEND_PORT`、`BACKEND_PORT` 显式覆盖，冲突时不自动漂移。
 
-历史 Vue 版本使用带 Vue 后缀的启动脚本：
+后端和前端源码通过 bind mount 保留热更新。Python 依赖安装在镜像中，前端 `node_modules` 使用 Docker Volume；宿主机无需安装 Python、Node.js、pnpm 或 MySQL。MySQL 不映射宿主机 `3306`，数据保存在 `mysql_data`，任何项目脚本都不得执行 `docker compose down -v`。
 
-```bash
-./scripts/start-local-vue.sh
-```
-
-该脚本会启动同一套 MySQL 和 FastAPI 后端，并启动 `vue-frontend/`。
-
-### 1. 启动 MySQL
-
-Windows 开发环境启动本机 MySQL 服务。Docker 数据库部署继续使用：
-
-```bash
-docker compose up -d mysql
-```
-
-### 2. 启动后端
-
-```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-uvicorn app.main:app --reload
-```
-
-默认地址：
-
-```text
-http://localhost:8000
-```
-
-健康检查：
-
-```text
-http://localhost:8000/api/health
-```
-
-### 3. 启动 React 主前端
-
-```bash
-cd frontend
-pnpm install --frozen-lockfile
-pnpm dev
-```
-
-默认地址：
-
-```text
-http://localhost:5174
-```
-
-### 4. 启动 Vue 历史前端
-
-```bash
-cd vue-frontend
-pnpm install --frozen-lockfile
-pnpm dev
-```
-
-Vue 前端通过 `vue-frontend/pnpm-workspace.yaml` 的 `onlyBuiltDependencies` 允许 `esbuild`、`vue-demi` 执行必要构建脚本。该目录仅作为历史版本保留。
-
-默认地址：
-
-```text
-http://localhost:5173
-```
+历史 Vue 版本不进入默认 Compose 主流程；确需回看时可使用 `scripts/start-local-vue.sh`，该旧脚本仍依赖宿主机开发工具。
 
 ## 环境变量
 
-复制 `.env.example` 为 `.env` 后再按本地环境修改。后端配置固定读取项目根目录的 `.env`，从根目录或 `backend/` 目录启动都可以读取同一份配置。本地模式需要填写 `MYSQL_DATABASE`、`MYSQL_USER`、`MYSQL_PASSWORD` 和 `DATABASE_URL`；Docker 模式还需要填写 `MYSQL_ROOT_PASSWORD`。数据库需要提前创建。
-
-重点变量：
+复制 `.env.example` 为 `.env` 后填写密码。容器内数据库主机固定为 Compose 服务名 `mysql`，应用数据库账号固定为普通账号 `multichateval`：
 
 ```text
-DATABASE_URL=mysql+aiomysql://<用户名>:<密码>@127.0.0.1:3306/multichateval
+MYSQL_HOST=mysql
+MYSQL_USER=multichateval
+BACKEND_PORT=8000
+FRONTEND_PORT=5174
+DATABASE_URL=mysql+aiomysql://multichateval:<密码>@mysql:3306/multichateval
 BACKEND_CORS_ORIGINS=http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:5174
 ```
 
-真实模型 API Key 不应提交到 Git。
+`.env` 和真实模型 API Key 不应提交到 Git。用户名或密码包含 URL 特殊字符时，`DATABASE_URL` 中对应部分需要百分号编码。
 
 ## 当前实现状态与 React 前端维护方向
 
@@ -372,7 +313,7 @@ Final = 0.90 × BaseFinal + 0.10 × FeedbackScore  # 已有反馈
 
 优先推进的任务是：
 
-1. Windows 开发环境安装依赖并启动前后端，默认使用 `.\scripts\start-local.ps1`；macOS 或 Linux 使用 `./scripts/start-local.sh`。
+1. 启动 Docker Desktop 后，Windows 使用 `.\scripts\start-local.ps1`，macOS 或 Linux 使用 `./scripts/start-local.sh` 构建并运行完整 Compose 开发栈。
 2. 确认 React 主前端能调用后端真实模型接口。
 3. 确认逐 token 流式展示、“评分中……”状态和全局思考模式行为正常。
 4. 验证评分结果、点赞/点踩和公开评论均正确持久化到 MySQL。

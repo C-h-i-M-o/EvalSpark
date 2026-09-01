@@ -33,7 +33,7 @@ v2 已提供按角色分流的反馈统计：普通用户查看个人评测表�
 - 当前主前端：React 19、TypeScript、Vite、React Router、Tailwind CSS、Ant Design、Recharts、GSAP，位于 `frontend/`
 - 历史前端：Vue 3、JavaScript、Vite、Pinia、Vue Router、Axios、Element Plus、Markdown-it、DOMPurify、GSAP，位于 `vue-frontend/`，后续不再作为主要开发目标
 - 数据库：MySQL 8
-- Windows 开发数据库：本地 MySQL 8；Docker Compose 数据库部署继续保留
+- 开发环境：Docker Compose 统一运行 MySQL、Alembic 迁移、FastAPI 后端和 React/Vite 前端
 
 ## 仓库结构
 
@@ -57,117 +57,87 @@ MultiChatEval/
 - `docs/architecture.md`：系统架构和核心流程。
 - `docs/api.md`：后端接口说明。
 - `docs/database.md`：数据库表结构说明。
+- `docs/docker-development-spec-plan.md`：全栈 Docker 开发环境的需求、方案、实施步骤和验收标准。
 - `docs/react-rewrite/`：React 替代 Vue 的历史重构文档。
 - `docs/react-rewrite/acceptance.md`：React 替代完成时的验收清单。
 - `docs/legacy-v2/`：v2 已落地阶段设计归档；原 v2 开发计划已废除并移除。
 
 ## 快速开始
 
-Windows 11 推荐在 PowerShell 控制台运行：
+默认开发环境只要求安装并启动 Docker Desktop（包含 Docker Compose）。Python、Node.js、pnpm、MySQL、后端和 React 前端均在容器中运行。
 
-```powershell
-.\scripts\start-local.ps1
-```
-
-如果系统执行策略阻止 `.ps1`，可以仅为本次启动临时绕过：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\start-local.ps1
-```
-
-macOS 或 Linux 继续使用 Bash 脚本：
-
-```bash
-./scripts/start-local.sh
-```
-
-两个脚本都会启动当前 React 主前端全栈项目。Windows 脚本默认使用本机安装的 MySQL；Bash 脚本继续使用 Docker MySQL。
-
-脚本会自动检查 `.env`、准备后端虚拟环境、安装后端和 React 前端依赖、执行 Alembic 数据库迁移，并默认启动后端 `http://127.0.0.1:8000` 与 React 前端 `http://127.0.0.1:5174`。Windows 本地模式只等待 `.env` 指定的 MySQL 端口，不会启动或修改 Windows MySQL 服务；如需临时使用 Docker 数据库，可运行 `.\scripts\start-local.ps1 -DatabaseMode Docker`。Windows 可通过 `.\scripts\start-local.ps1 -BackendPort 8001 -FrontendPort 5175` 指定起始端口；macOS 或 Linux 可通过 `BACKEND_PORT=8001 FRONTEND_PORT=5175 ./scripts/start-local.sh` 指定。按 `Ctrl+C` 可以停止本次启动的后端和前端进程。
-
-运行前请确保已经安装并启动：
-
-- Python 3.11 或更高版本。
-- Node.js 与 pnpm。
-- Windows 本地模式需要 MySQL 8 和 PowerShell 5.1 或更高版本，无需安装 Docker、`curl` 或 `lsof`。
-- Docker 数据库模式需要 Docker Desktop（包含 Docker Compose）。
-- macOS 或 Linux 需要 Docker、Bash、`curl` 和 `lsof`。
-
-React 版本脚本会按 `backend/pyproject.toml` 和 `frontend/pnpm-lock.yaml` 校验依赖，并在数据库端口和前后端真实可访问后才提示启动完成。Windows 脚本不会弹出额外控制台窗口，标准输出和错误日志分别写入 `logs/`；按 `Ctrl+C` 只停止本次启动的前后端进程，不停止本地 MySQL 服务或 Docker MySQL 容器。
-
-React 前端通过 `frontend/pnpm-workspace.yaml` 固定 `picomatch@4.0.4`。这是为了避开新版 pnpm minimum release age 策略对刚发布传递依赖的拦截，保证 VSCode、系统终端和 Codex 终端都能按锁文件稳定安装。
-
-如果默认端口已被占用，脚本会自动向后寻找可用端口，并把实际后端地址同步给 Vite 代理。
-
-首次运行时脚本会自动复制环境变量模板；如需手动准备，Windows PowerShell 可执行：
+首次运行先准备根目录 `.env`：
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-macOS 或 Linux 可执行：
+macOS 或 Linux 使用：
 
 ```bash
 cp .env.example .env
 ```
 
-本地开发前必须填写根目录 `.env` 中的 `MYSQL_DATABASE`、`MYSQL_USER`、`MYSQL_PASSWORD` 和 `DATABASE_URL`，并提前创建 `MYSQL_DATABASE` 指定的数据库；使用 Docker 模式时还必须填写 `MYSQL_ROOT_PASSWORD`。Windows 启动脚本发现当前模式所需配置为空或仍含 `CHANGE_ME` 时会直接停止，不会执行数据库迁移。若用户名或密码含有 `@`、`:`、`/` 等 URL 特殊字符，写入 `DATABASE_URL` 前需要进行百分号编码。
+填写 `.env` 中的 `MYSQL_PASSWORD`、`MYSQL_ROOT_PASSWORD`、`JWT_SECRET_KEY` 和 `DATABASE_URL` 密码部分。应用数据库账号固定为 `multichateval`，数据库主机固定为 Compose 服务名 `mysql`。用户名或密码含有 `@`、`:`、`/` 等 URL 特殊字符时，写入 `DATABASE_URL` 前需要百分号编码。脚本发现有效配置行中仍含 `CHANGE_ME` 时会在创建容器前停止。
+
+Windows 11 在 PowerShell 中运行：
+
+```powershell
+.\scripts\start-local.ps1
+```
+
+如果执行策略阻止 `.ps1`，可以仅为本次启动临时绕过：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start-local.ps1
+```
+
+macOS 或 Linux 运行：
+
+```bash
+./scripts/start-local.sh
+```
+
+两个脚本都会先校验 Docker 与 Compose 配置，再构建并前台启动以下服务：
+
+- `mysql`：MySQL 8.4，数据保存在 `mysql_data` 命名卷中，不映射宿主机 `3306`。
+- `migrate`：等待 MySQL 健康后执行 `alembic upgrade head`，成功后退出。
+- `backend`：FastAPI + Uvicorn 热更新，默认映射到 `http://127.0.0.1:8000`。
+- `frontend`：React + Vite 热更新，默认映射到 `http://127.0.0.1:5174`，并通过 Compose 网络代理 `/api` 到后端。
+
+前后端源码以 bind mount 挂载；宿主机 `.venv` 和 `node_modules` 不参与容器运行。依赖清单变化时重新构建镜像，普通源码修改会自动热更新。
+
+端口固定且冲突时直接报错，不会自动漂移。需要覆盖宿主机端口时修改 `.env`：
+
+```dotenv
+BACKEND_PORT=8001
+FRONTEND_PORT=5175
+```
+
+查看状态和日志：
+
+```powershell
+docker compose ps
+docker compose logs -f backend frontend
+```
+
+按 `Ctrl+C` 可停止前台开发环境，也可以在另一个终端执行普通停止：
+
+```powershell
+docker compose down
+```
+
+普通停止、镜像重建和再次启动都会保留 `mysql_data`。以下命令会永久删除开发数据库卷，仅在明确需要清空全部开发数据时人工执行，项目脚本绝不会自动调用：
+
+```powershell
+docker compose down -v
+```
 
 部署到非本地环境前，必须将 `.env` 中的 `JWT_SECRET_KEY` 改为足够长的随机值，并在 HTTPS 环境设置 `AUTH_COOKIE_SECURE=true`。
 
-### 1. 启动数据库
+历史 `vue-frontend/` 不进入默认 Compose 主流程。确需回看旧版本时可使用 `scripts/start-local-vue.sh`，该旧脚本仍要求宿主机安装相应开发依赖。
 
-Windows 开发环境先启动本机 MySQL 服务，然后直接运行 PowerShell 一键启动脚本。Docker 数据库部署仍可使用：
-
-```bash
-docker compose up -d mysql
-```
-
-本地 MySQL 和 Docker MySQL 默认都使用宿主机 `3306`，二者不要同时运行。
-
-### 2. 启动后端
-
-```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-uvicorn app.main:app --reload
-```
-
-后端默认地址：
-
-```text
-http://localhost:8000
-```
-
-### 3. 启动 React 主前端
-
-```bash
-cd frontend
-pnpm install --frozen-lockfile
-pnpm dev
-```
-
-React 前端默认地址：
-
-```text
-http://localhost:5174
-```
-
-如果需要查看历史 Vue 版本，可使用带 Vue 后缀的启动脚本，或进入 `vue-frontend/` 手动启动；该目录仅作为历史版本保留，不再作为后续主要开发目标。
-
-```bash
-./scripts/start-local-vue.sh
-```
-
-React 替代完成后的验收可运行：
-
-```bash
-./scripts/verify-react-rewrite.sh
-```
-
-该脚本会依次验证后端测试、React 测试、React 构建、Vue 测试、Vue 构建和 `git diff --check`。Vue 相关检查用于确认历史版本仍未被无意破坏，后续业务开发以 React 前端为准。
+React 替代完成后的历史验收脚本 `scripts/verify-react-rewrite.sh` 仍保留；当前容器化开发环境的设计与验收标准见 `docs/docker-development-spec-plan.md`。
 
 ## 当前能力
 
@@ -223,10 +193,8 @@ v2 阶段 2/3 已提供管理员模型参数、四类计费配置、用户每日
 
 首次创建管理员：
 
-```bash
-cd backend
-source .venv/bin/activate
-python -m app.scripts.create_admin --username admin
+```powershell
+docker compose exec backend python -m app.scripts.create_admin --username admin
 ```
 
 如果评测问题较长或模型响应较慢，可在管理员模型配置的“高级选项”中调整对应模型的请求超时。

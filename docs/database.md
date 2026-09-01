@@ -1,5 +1,11 @@
 # 数据库设计
 
+## 初始化与迁移基线
+
+Docker 首次创建 `mysql_data` 时，`docker/mysql/init/001_schema.sql` 会创建截至 Alembic `20260612_01` 的基础结构，并在 `alembic_version` 中写入该版本。随后 `migrate` 服务执行 `alembic upgrade head`，只应用基线之后的迁移；已有数据卷不会重复执行初始化 SQL，但每次启动仍会检查并升级到最新版本。
+
+`alembic_version` 是迁移工具维护的元数据表，不承载业务数据。普通 `docker compose down` 会保留该表和全部业务表；只有显式执行带 `-v` 的清卷命令才会删除开发数据库卷。
+
 ## users
 
 用户表，保存登录用户信息。

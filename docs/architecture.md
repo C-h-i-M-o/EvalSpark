@@ -20,6 +20,24 @@ Evaluation Service
 MySQL
 ```
 
+## Docker 开发部署
+
+默认开发环境由根目录 `docker-compose.yml` 统一编排，宿主机只需要 Docker Desktop 与 Docker Compose：
+
+```text
+浏览器 http://127.0.0.1:5174
+  ↓ 同源 /api
+frontend:5174（React + Vite 热更新）
+  ↓ http://backend:8000
+backend:8000（FastAPI + Uvicorn 热更新）
+  ↓ mysql+aiomysql://...@mysql:3306/multichateval
+mysql:3306（仅 Compose 内部网络）
+```
+
+启动依赖为 `mysql healthy → migrate completed → backend healthy → frontend`。首次创建数据库卷时，初始化 SQL 创建截至 `20260612_01` 的结构并写入对应 Alembic 基线；`migrate` 每次启动再升级到最新版本。只有迁移成功后后端才会运行；前端通过 `VITE_BACKEND_TARGET=http://backend:8000` 把 `/api` 请求代理到后端。
+
+`backend/` 和 `frontend/` 以 bind mount 挂入容器，分别由 Uvicorn 和 Vite 监听源码变化。Python 依赖安装在后端镜像中，前端 `node_modules` 使用独立命名卷，因此宿主机 `.venv` 与 `node_modules` 不进入容器运行环境。MySQL 数据保存在 `mysql_data` 命名卷中，普通停止和镜像重建不会删除数据；Compose 不把 MySQL `3306` 映射到宿主机。
+
 ## 核心流程
 
 1. 用户注册或登录，后端通过 HttpOnly Cookie JWT 恢复当前用户。
