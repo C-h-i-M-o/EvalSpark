@@ -5,7 +5,7 @@ SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "start-local.sh"
 
 
 def test_start_local_runs_alembic_migrations_before_backend() -> None:
-    script = SCRIPT_PATH.read_text()
+    script = SCRIPT_PATH.read_text(encoding="utf-8")
 
     assert "run_migrations" in script
     assert ".venv/bin/alembic upgrade head" in script
@@ -13,7 +13,7 @@ def test_start_local_runs_alembic_migrations_before_backend() -> None:
 
 
 def test_start_local_selects_available_ports_and_passes_backend_target_to_vite() -> None:
-    script = SCRIPT_PATH.read_text()
+    script = SCRIPT_PATH.read_text(encoding="utf-8")
 
     assert "find_available_port" in script
     assert 'BACKEND_PORT="$(find_available_port "${BACKEND_PORT}")"' in script
@@ -24,7 +24,7 @@ def test_start_local_selects_available_ports_and_passes_backend_target_to_vite()
 
 
 def test_start_local_does_not_download_embedding_model() -> None:
-    script = SCRIPT_PATH.read_text()
+    script = SCRIPT_PATH.read_text(encoding="utf-8")
 
     assert "sentence_transformers" not in script
     assert "prepare_embedding_model" not in script
@@ -33,7 +33,7 @@ def test_start_local_does_not_download_embedding_model() -> None:
 
 
 def test_start_local_installs_locked_dependencies_and_checks_services() -> None:
-    script = SCRIPT_PATH.read_text()
+    script = SCRIPT_PATH.read_text(encoding="utf-8")
 
     assert 'pip install -e ".[dev]"' in script
     assert "pnpm install --frozen-lockfile" in script
@@ -52,7 +52,7 @@ def test_comment_migration_supports_latest_init_schema() -> None:
         / "versions"
         / "20260606_add_user_comments.py"
     )
-    migration = migration_path.read_text()
+    migration = migration_path.read_text(encoding="utf-8")
 
     assert 'if "user_comments" not in tables:' in migration
     assert 'if "comment" in _existing_columns("user_feedback"):' in migration

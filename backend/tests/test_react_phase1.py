@@ -8,7 +8,7 @@ SCRIPT_PATH = PROJECT_ROOT / "scripts" / "start-local.sh"
 
 
 def test_react_frontend_package_defines_phase1_commands_and_dependencies() -> None:
-    package_json = json.loads((REACT_DIR / "package.json").read_text())
+    package_json = json.loads((REACT_DIR / "package.json").read_text(encoding="utf-8"))
 
     assert package_json["type"] == "module"
     assert package_json["scripts"]["dev"] == "vite"
@@ -19,12 +19,12 @@ def test_react_frontend_package_defines_phase1_commands_and_dependencies() -> No
     assert package_json["dependencies"]["react"]
     assert package_json["dependencies"]["react-dom"]
     assert package_json["dependencies"]["react-router-dom"]
-    assert "any" not in (REACT_DIR / "src" / "api" / "client.ts").read_text()
+    assert "any" not in (REACT_DIR / "src" / "api" / "client.ts").read_text(encoding="utf-8")
 
 
 def test_react_frontend_configures_backend_proxy_and_typescript_strict_mode() -> None:
-    vite_config = (REACT_DIR / "vite.config.ts").read_text()
-    ts_config = json.loads((REACT_DIR / "tsconfig.app.json").read_text())
+    vite_config = (REACT_DIR / "vite.config.ts").read_text(encoding="utf-8")
+    ts_config = json.loads((REACT_DIR / "tsconfig.app.json").read_text(encoding="utf-8"))
 
     assert 'process.env.VITE_BACKEND_TARGET || "http://localhost:8000"' in vite_config
     assert 'process.env.VITE_DEV_PORT || "5174"' in vite_config
@@ -35,11 +35,11 @@ def test_react_frontend_configures_backend_proxy_and_typescript_strict_mode() ->
 
 
 def test_react_frontend_exposes_phase1_health_and_auth_recovery() -> None:
-    app_source = (REACT_DIR / "src" / "App.tsx").read_text()
-    api_source = (REACT_DIR / "src" / "api" / "client.ts").read_text()
-    auth_source = (REACT_DIR / "src" / "features" / "auth" / "auth.ts").read_text()
-    auth_context_source = (REACT_DIR / "src" / "features" / "auth" / "AuthContext.tsx").read_text()
-    route_guard_source = (REACT_DIR / "src" / "routes" / "RouteGuards.tsx").read_text()
+    app_source = (REACT_DIR / "src" / "App.tsx").read_text(encoding="utf-8")
+    api_source = (REACT_DIR / "src" / "api" / "client.ts").read_text(encoding="utf-8")
+    auth_source = (REACT_DIR / "src" / "features" / "auth" / "auth.ts").read_text(encoding="utf-8")
+    auth_context_source = (REACT_DIR / "src" / "features" / "auth" / "AuthContext.tsx").read_text(encoding="utf-8")
+    route_guard_source = (REACT_DIR / "src" / "routes" / "RouteGuards.tsx").read_text(encoding="utf-8")
 
     assert "getHealthStatus" in api_source
     assert 'fetchJson<HealthStatus>("/api/health")' in api_source
@@ -58,7 +58,7 @@ def test_react_frontend_exposes_phase1_health_and_auth_recovery() -> None:
 
 
 def test_start_local_script_uses_react_frontend_without_touching_vue_frontend() -> None:
-    script = SCRIPT_PATH.read_text()
+    script = SCRIPT_PATH.read_text(encoding="utf-8")
 
     assert 'REACT_FRONTEND_DIR="${PROJECT_ROOT}/frontend"' in script
     assert 'FRONTEND_PORT="${FRONTEND_PORT:-${REACT_FRONTEND_PORT:-5174}}"' in script

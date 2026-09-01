@@ -20,7 +20,7 @@ MultiChatEval 是一个“面向多模型问答的对话质量评估系统”。
 - 当前主前端：React 19、TypeScript、Vite、React Router、Tailwind CSS、Ant Design、Recharts、GSAP，独立目录 `frontend/` 并复用现有后端 API
 - 历史前端：Vue 3、JavaScript、Vite、Pinia、Vue Router、Axios、Element Plus、Markdown-it、DOMPurify、GSAP，位于 `vue-frontend/`，后续不再作为主要开发目标
 - 数据库：MySQL 8
-- 本地数据库环境：Docker Compose
+- Windows 开发数据库：本地 MySQL 8；Docker Compose 数据库部署继续保留
 - 包管理：前端优先使用 pnpm
 
 注意：当前主前端使用 React + TypeScript。历史 Vue 前端使用 JavaScript，不作为后续新功能开发目标。
@@ -133,13 +133,19 @@ MultiChatEval/
 
 ## 本地运行方式
 
-推荐使用一键启动脚本：
+Windows 开发环境推荐在 PowerShell 中使用一键启动脚本，默认连接根目录 `.env` 配置的本地 MySQL：
+
+```powershell
+.\scripts\start-local.ps1
+```
+
+macOS 或 Linux 继续使用：
 
 ```bash
 ./scripts/start-local.sh
 ```
 
-脚本会检查 `.env`、启动 MySQL、准备后端虚拟环境和 React 前端依赖、执行 Alembic 数据库迁移，并同时启动后端与 React 主前端开发服务。默认 React 前端地址为 `http://127.0.0.1:5174`；如端口占用，会自动向后寻找可用端口。按 `Ctrl+C` 可停止本次启动的服务。
+Windows 脚本会检查 `.env` 和本地 MySQL 端口，不会启动或修改 Windows MySQL 服务；随后准备后端虚拟环境和 React 前端依赖、执行 Alembic 数据库迁移，并同时启动后端与 React 主前端开发服务。如需临时使用 Docker MySQL，可传入 `-DatabaseMode Docker`。默认 React 前端地址为 `http://127.0.0.1:5174`；如端口占用，会自动向后寻找可用端口。按 `Ctrl+C` 可停止本次启动的前后端服务。
 
 历史 Vue 版本使用带 Vue 后缀的启动脚本：
 
@@ -150,6 +156,8 @@ MultiChatEval/
 该脚本会启动同一套 MySQL 和 FastAPI 后端，并启动 `vue-frontend/`。
 
 ### 1. 启动 MySQL
+
+Windows 开发环境启动本机 MySQL 服务。Docker 数据库部署继续使用：
 
 ```bash
 docker compose up -d mysql
@@ -209,12 +217,12 @@ http://localhost:5173
 
 ## 环境变量
 
-复制 `.env.example` 为 `.env` 后再按本地环境修改。后端配置固定读取项目根目录的 `.env`，从根目录或 `backend/` 目录启动都可以读取同一份配置。
+复制 `.env.example` 为 `.env` 后再按本地环境修改。后端配置固定读取项目根目录的 `.env`，从根目录或 `backend/` 目录启动都可以读取同一份配置。本地模式需要填写 `MYSQL_DATABASE`、`MYSQL_USER`、`MYSQL_PASSWORD` 和 `DATABASE_URL`；Docker 模式还需要填写 `MYSQL_ROOT_PASSWORD`。数据库需要提前创建。
 
 重点变量：
 
 ```text
-DATABASE_URL=mysql+aiomysql://multichateval:multichateval@localhost:3306/multichateval
+DATABASE_URL=mysql+aiomysql://<用户名>:<密码>@127.0.0.1:3306/multichateval
 BACKEND_CORS_ORIGINS=http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:5174
 ```
 
@@ -364,7 +372,7 @@ Final = 0.90 × BaseFinal + 0.10 × FeedbackScore  # 已有反馈
 
 优先推进的任务是：
 
-1. 安装依赖并启动前后端，默认使用 `./scripts/start-local.sh`。
+1. Windows 开发环境安装依赖并启动前后端，默认使用 `.\scripts\start-local.ps1`；macOS 或 Linux 使用 `./scripts/start-local.sh`。
 2. 确认 React 主前端能调用后端真实模型接口。
 3. 确认逐 token 流式展示、“评分中……”状态和全局思考模式行为正常。
 4. 验证评分结果、点赞/点踩和公开评论均正确持久化到 MySQL。

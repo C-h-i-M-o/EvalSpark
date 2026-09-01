@@ -16,7 +16,7 @@ MultiChatEval 是一个面向多模型问答的对话质量评估系统。用户
 
 当前版本优先保证多模型、规则评分、LLM Judge、逐 token 流式展示、历史任务查询和用户反馈的完整链路。系统已经可以从前端发起评测请求，并由后端并发调用真实 OpenAI-compatible 模型接口；各模型生成过程会以 NDJSON 增量事件实时展示，单个模型回答完成后进入“评分中……”，评分完成后更新为最终结果。评测任务、回答、评分、点赞/点踩和公开评论会写入 MySQL，并可在历史任务页继续查看和操作。
 
-当前 React 主前端已落地：`frontend/` 已提供 React 19 + TypeScript + Vite 工程、Tailwind CSS、Ant Design、Recharts、GSAP、Vite `/api` 开发代理、类型化 API 客户端、系统健康检查、登录态恢复、登录、注册、退出、受保护业务路由、基础业务布局、按角色导航、`/` 评测工作台、`/history` 历史任务、`/models` 管理员模型配置、`/users` 用户额度和 `/feedback` 反馈统计页面。评测工作台已支持模型列表、今日 Token、公开/私有、思考模式、LLM 评审、多模型逐 token NDJSON 展示、评分中状态、卡片内 Markdown 与数学公式渲染、`<think>` 默认展开、评分详情和点赞/点踩反馈。历史页已支持分页、详情加载、状态标记、超时提示、反馈操作和公开评论分页、发布、删除。管理员页面已支持模型配置维护、连接测试、用户搜索筛选、服务端分页、封号/解封和普通用户每日 Token 额度调整。反馈统计已支持普通用户个人统计和管理员全局统计、每日趋势、互动明细。React 前端已补充品牌 logo、深色侧栏、主题色层和遵循减少动态效果偏好的 GSAP 页面/卡片/弹窗动画。`scripts/start-local.sh` 可一键启动 React 主前端全栈项目，`scripts/start-local-vue.sh` 可启动历史 Vue 版本，`scripts/verify-react-rewrite.sh` 可运行后端、React、Vue 和 diff 验收。
+当前 React 主前端已落地：`frontend/` 已提供 React 19 + TypeScript + Vite 工程、Tailwind CSS、Ant Design、Recharts、GSAP、Vite `/api` 开发代理、类型化 API 客户端、系统健康检查、登录态恢复、登录、注册、退出、受保护业务路由、基础业务布局、按角色导航、`/` 评测工作台、`/history` 历史任务、`/models` 管理员模型配置、`/users` 用户额度和 `/feedback` 反馈统计页面。评测工作台已支持模型列表、今日 Token、公开/私有、思考模式、LLM 评审、多模型逐 token NDJSON 展示、评分中状态、卡片内 Markdown 与数学公式渲染、`<think>` 默认展开、评分详情和点赞/点踩反馈。历史页已支持分页、详情加载、状态标记、超时提示、反馈操作和公开评论分页、发布、删除。管理员页面已支持模型配置维护、连接测试、用户搜索筛选、服务端分页、封号/解封和普通用户每日 Token 额度调整。反馈统计已支持普通用户个人统计和管理员全局统计、每日趋势、互动明细。React 前端已补充品牌 logo、深色侧栏、主题色层和遵循减少动态效果偏好的 GSAP 页面/卡片/弹窗动画。Windows 开发环境可通过 `scripts/start-local.ps1` 连接本地 MySQL 并一键启动 React 主前端全栈项目；`scripts/start-local.sh` 继续用于 Docker MySQL 环境，`scripts/start-local-vue.sh` 可启动历史 Vue 版本，`scripts/verify-react-rewrite.sh` 可运行后端、React、Vue 和 diff 验收。
 
 ## 2. 前端功能
 
@@ -662,6 +662,7 @@ final =
 已有能力：
 
 - `docker-compose.yml` 提供 MySQL 服务。
+- `scripts/start-local.ps1` 默认读取根目录 `.env` 并连接 Windows 本地 MySQL；传入 `-DatabaseMode Docker` 时仍可启动 Docker MySQL。
 - `scripts/start-local.sh` 可自动准备 `.env`、启动 MySQL、安装依赖、执行 Alembic 数据库迁移，并启动后端和 React 主前端开发服务。
 - `scripts/start-local-vue.sh` 可自动准备 `.env`、启动 MySQL、安装依赖、执行 Alembic 数据库迁移，并启动后端和历史 Vue 前端开发服务。
 - `scripts/verify-react-rewrite.sh` 可统一执行后端测试、React 测试、React 构建、Vue 测试、Vue 构建和 `git diff --check`。
@@ -731,7 +732,7 @@ v2 新功能开发已结束，React 已完成对原 Vue 前端的功能替代。
 
 1. 后续新功能、样式优化和交互修复默认修改 `frontend/`。
 2. `vue-frontend/` 仅作为历史版本保留，默认不再承接新功能。
-3. 启动 React 主前端使用 `./scripts/start-local.sh`。
+3. Windows 开发环境启动 React 主前端使用 `.\scripts\start-local.ps1`；macOS 或 Linux 使用 `./scripts/start-local.sh`。
 4. 启动历史 Vue 版本使用 `./scripts/start-local-vue.sh`。
 5. React 主前端验收继续使用 `scripts/verify-react-rewrite.sh`，该脚本仍会检查 Vue 历史版本是否被无意破坏。
 6. 后续如要移除 Vue 前端，需要单独任务决策。
