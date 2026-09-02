@@ -1,5 +1,17 @@
 # EvalSpark 全栈 Docker 开发环境 Spec 与实施计划
 
+> 本文主体记录已经完成的四服务 Docker 迁移基线。2026-09-02 的 V3 增量由 `v3-rag-spec-plan.md` 统一管理：当前 Compose 在原四服务外新增 `embedding`、`qdrant`、`redis`、`rag-worker`，不要把下方历史四服务验收记录当作 V3 验收结果。
+
+## V3 阶段 1 增量
+
+- 新增服务只开放 Compose 内网；`backend → migrate` 的原启动依赖不变，普通评测不等待 RAG。
+- `embedding` 使用固定 digest 的 TEI CPU 镜像及固定模型 SHA，负责首次下载到 `rag_model_cache`；后端和 Worker 只读挂载同一缓存。
+- `rag-worker` 与后端共用 `evalspark-backend:dev`，只连接内网 Redis 队列，当前尚未接入文档作业。源码挂载不等于 Worker 热更新，修改任务代码后需重启 Worker。
+- 新增文档、向量、Redis 卷分别为 `rag_documents`、`qdrant_data`、`rag_redis_data`。原 `mysql_data`、`frontend_node_modules` 保留，不运行任何清卷命令。
+- TEI 限制 4 GiB/4 CPU，Qdrant 2 GiB，Redis 256 MiB（数据上限 128 MiB，满时拒写），Worker 1 GiB；这是资源限制，不是并发/大文档性能承诺。16 GB 机器应关注 Docker 可用内存。
+- 仅启动 RAG 依赖可用 `docker compose up -d --no-deps embedding qdrant redis`；依赖就绪后 `docker compose up -d --no-deps rag-worker`。完整启动脚本行为不变，会执行迁移，必须在已确认数据库升级范围后使用。
+- 模型下载/缓存复用、普通 health 隔离和测试结果统一记录于 V3 文档，不把模拟测试写成真实部署验收。
+
 **目标：** 将 EvalSpark 的默认开发启动方式统一为 Docker Compose：MySQL、Alembic 迁移、FastAPI 后端和 React/Vite 前端全部在容器中运行，同时保留前后端源码热更新，并将开发者的宿主机依赖收敛为 Docker Desktop。
 
 **实现方式：** 为后端和前端分别提供固定运行时版本线的开发镜像，由根目录 `docker-compose.yml` 编排 `mysql`、`migrate`、`backend` 和 `frontend` 四个服务。源码通过 bind mount 挂载，依赖保留在镜像或 Docker Volume 中；前端通过 Compose 内部网络代理后端，后端通过服务名 `mysql` 连接数据库。

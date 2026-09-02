@@ -33,16 +33,21 @@ services:
     restart: "no"
 
   backend:
+    image: evalspark-backend:dev
     build:
       context: ./backend
       dockerfile: Dockerfile.dev
     env_file:
       - .env
+    environment:
+      RAG_EMBEDDING_MAX_BATCH_TOKENS: ${RAG_EMBEDDING_MAX_BATCH_TOKENS:-2048}
     command: ["python", "-m", "uvicorn", "app.main:app", "--reload", "--host", "0.0.0.0", "--port", "8000"]
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:
       - ./backend:/app
+      - rag_model_cache:/data:ro
+      - rag_documents:/documents
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -76,6 +81,103 @@ services:
       timeout: 3s
       retries: 20
 
+  # 固定 CPU 镜像及模型提交；模型缓存仅由 TEI 写入。
+  embedding:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9@sha256:c26a226262ad4ff3330fb30b76653c1bb65da2fcf413b92284545a010e0a8a48
+    platform: linux/amd64
+    restart: unless-stopped
+    command:
+      - --model-id
+      - Qwen/Qwen3-Embedding-0.6B
+      - --revision
+      - ${RAG_EMBEDDING_REVISION:-97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3}
+      - --huggingface-hub-cache
+      - /data
+      - --port
+      - "80"
+      - --hostname
+      - "0.0.0.0"
+      - --dtype
+      - float32
+      - --tokenization-workers
+      - "2"
+      - --max-client-batch-size
+      - "16"
+      - --max-batch-tokens
+      - ${RAG_EMBEDDING_MAX_BATCH_TOKENS:-2048}
+      - --max-batch-requests
+      - "16"
+      - --auto-truncate
+      # 允许低于模型 32K 的 CPU 上限；项目请求始终显式 truncate=false。
+      - "true"
+      - --max-concurrent-requests
+      - "8"
+      - --disable-spans
+    environment:
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      OMP_NUM_THREADS: "4"
+    volumes:
+      - rag_model_cache:/data
+    mem_limit: 4g
+    cpus: 4
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:80/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 5m
+
+  qdrant:
+    image: qdrant/qdrant:v1.19.0@sha256:6c0652f8d6925b22f2f6f0e0a5365a6c9dbc8768bd6e70ccc1cdc14847e452a0
+    platform: linux/amd64
+    restart: unless-stopped
+    environment:
+      QDRANT__TELEMETRY_DISABLED: "true"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    mem_limit: 2g
+
+  redis:
+    image: redis:7.2.16-bookworm@sha256:e17e3a1993da428251cbd88dbdb3de8c8d4007f840d7350eb17a2d8695fa705f
+    platform: linux/amd64
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - rag_redis_data:/data
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  rag-worker:
+    image: evalspark-backend:dev
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    env_file:
+      - .env
+    environment:
+      RAG_EMBEDDING_MAX_BATCH_TOKENS: ${RAG_EMBEDDING_MAX_BATCH_TOKENS:-2048}
+    command: ["python", "-m", "celery", "-A", "app.worker:celery_app", "worker", "--loglevel=INFO", "--concurrency=1", "--prefetch-multiplier=1", "--queues=rag"]
+    volumes:
+      - ./backend:/app
+      - rag_model_cache:/data:ro
+      - rag_documents:/documents
+    depends_on:
+      redis:
+        condition: service_healthy
+      embedding:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    mem_limit: 1g
+
 volumes:
   mysql_data:
   frontend_node_modules:
+  rag_model_cache:
+  rag_documents:
+  qdrant_data:
+  rag_redis_data:

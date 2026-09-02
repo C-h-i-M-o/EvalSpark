@@ -6,6 +6,8 @@
 
 ## 当前状态
 
+V3 RAG 正在按 [需求规格与分阶段实施计划](docs/v3-rag-spec-plan.md) 开发。当前新增私有 Embedding、向量检索和任务队列基础设施，尚未开放知识库、RAG 评测 API 或 React 页面。Agent 工具评测与 AI 安全测试集将在 RAG 之后单独设计。
+
 当前 **v2 版本开发已经结束并冻结**，后续不再继续推进语义分析、模型推荐、运行监控等新功能。React 前端已经完成对原 Vue 前端的功能替代，后续开发统一使用 `frontend/` React 技术栈；`vue-frontend/` 仅作为历史版本保留，用于必要时回看旧实现。
 
 v2 已完成并保留的账号体系与权限控制能力：
@@ -33,6 +35,7 @@ v2 已提供按角色分流的反馈统计：普通用户查看个人评测表�
 - 当前主前端：React 19、TypeScript、Vite、React Router、Tailwind CSS、Ant Design、Recharts、GSAP，位于 `frontend/`
 - 历史前端：Vue 3、JavaScript、Vite、Pinia、Vue Router、Axios、Element Plus、Markdown-it、DOMPurify、GSAP，位于 `vue-frontend/`，后续不再作为主要开发目标
 - 数据库：MySQL 8
+- RAG 基础设施：Qwen3-Embedding-0.6B、TEI CPU、Qdrant、Redis、Celery（实施中）
 - 开发环境：Docker Compose 统一运行 MySQL、Alembic 迁移、FastAPI 后端和 React/Vite 前端
 
 ## 仓库结构
@@ -58,6 +61,7 @@ MultiChatEval/
 - `docs/api.md`：后端接口说明。
 - `docs/database.md`：数据库表结构说明。
 - `docs/docker-development-spec-plan.md`：全栈 Docker 开发环境的需求、方案、实施步骤和验收标准。
+- `docs/v3-rag-spec-plan.md`：V3 RAG 合并规格、阶段计划、固定依赖版本和验收证据。
 - `docs/react-rewrite/`：React 替代 Vue 的历史重构文档。
 - `docs/react-rewrite/acceptance.md`：React 替代完成时的验收清单。
 - `docs/legacy-v2/`：v2 已落地阶段设计归档；原 v2 开发计划已废除并移除。
@@ -104,6 +108,12 @@ macOS 或 Linux 运行：
 - `migrate`：等待 MySQL 健康后执行 `alembic upgrade head`，成功后退出。
 - `backend`：FastAPI + Uvicorn 热更新，默认映射到 `http://127.0.0.1:8000`。
 - `frontend`：React + Vite 热更新，默认映射到 `http://127.0.0.1:5174`，并通过 Compose 网络代理 `/api` 到后端。
+- `embedding`：CPU 私有部署 Qwen3-Embedding-0.6B，首次启动下载固定版本模型到 `rag_model_cache`；下载期间健康检查可能尚未通过。
+- `qdrant`：向量存储，使用 `qdrant_data`。
+- `redis`：Celery 消息队列，使用 `rag_redis_data` 持久化。
+- `rag-worker`：复用后端镜像，只读共享分词器缓存；当前仅配置任务队列，文档索引任务后续接入。
+
+新增 RAG 服务不映射宿主机端口，普通后端不依赖它们就绪。首次下载耗时取决于网络；查看 `docker compose logs -f embedding`。后端与 Worker 共用 `rag_documents` 文件卷，不在宿主机安装模型或 Python 依赖。只需验证新增服务时使用 `docker compose up -d --no-deps embedding qdrant redis`，不会触发 `migrate`；完整启动脚本仍会自动执行数据库迁移。
 
 前后端源码以 bind mount 挂载；宿主机 `.venv` 和 `node_modules` 不参与容器运行。依赖清单变化时重新构建镜像，普通源码修改会自动热更新。
 

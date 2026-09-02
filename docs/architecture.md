@@ -40,6 +40,21 @@ mysql:3306（仅 Compose 内部网络）
 
 ## 核心流程
 
+### V3 RAG 基础设施（阶段 1）
+
+当前只接入基础设施，尚未修改普通评测流程或开放 RAG 业务入口。`app/services/rag/clients.py` 通过 HTTP 调用内网 TEI，使用官方 Qdrant SDK 查询；`app/worker.py` 提供 Celery 配置，后续阶段才注册文档作业。
+
+- TEI CPU 加载固定 revision 的 Qwen3-Embedding-0.6B，输出 1024 维向量；查询带检索指令，文档不带指令。
+- TEI 独占模型缓存写权限。后端/Worker 使用同卷的只读 `tokenizer.json`，只按固定 revision 本地加载，不联网回退、不加载模型权重。
+- 客户端预检完整输入，按条数和 Token 总量分批，默认 16 条/2048 Token/60 秒；与 TEI 共用批量 Token 配置，所有 `/embed` 请求显式 `truncate=false`，不静默截断，拒绝错误维度、非有限数值或零向量。
+- Qdrant 查询固定集合 `rag_chunks_v1`，必须同时限定用户、知识库、文档与其版本配对；返回元数据再次校验归属，防止读取错误版本原文。集合创建和写入后续实现。
+- Redis 使用 AOF 和 `noeviction`；Worker 单并发、预取 1、JSON 消息、延迟确认、硬时限 3 小时与 4 小时可见性超时。持久作业、幂等、租约与恢复将在索引阶段实现，不能仅靠队列配置保证只执行一次。
+- 新增服务均只走 Compose 网络，普通后端健康检查不探测 TEI/Qdrant/Redis。Worker 等待 TEI/Redis 健康及 Qdrant 启动；Qdrant 连接错误由客户端处理。
+
+文件、向量与消息分别使用 `rag_documents`、`qdrant_data`、`rag_redis_data` 命名卷；原 MySQL 和前端卷保持不变。完整设计和阶段证据见 `v3-rag-spec-plan.md`。
+
+### 当前普通评测流程
+
 1. 用户注册或登录，后端通过 HttpOnly Cookie JWT 恢复当前用户。
 2. 用户输入问题，选择多个模型和公开或私有模式。
 3. 后端检查普通用户今日剩余额度，再创建评测任务。

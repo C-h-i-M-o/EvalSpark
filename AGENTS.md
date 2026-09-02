@@ -16,11 +16,13 @@ MultiChatEval 是一个“面向多模型问答的对话质量评估系统”。
 
 ## 当前技术栈
 
+- V3 RAG 正在实施：Compose 增加 TEI CPU（Qwen3-Embedding-0.6B）、Qdrant、Redis、Celery Worker；规格、阶段提交及验收统一见 `docs/v3-rag-spec-plan.md`。当前仅基础设施与客户端，知识库/索引/评测 API/React 页面尚未开放。Agent 与 AI 安全测试集另行设计。
 - 后端：Python、FastAPI、SQLAlchemy 2.0、Alembic、Pydantic Settings、pytest
 - 当前主前端：React 19、TypeScript、Vite、React Router、Tailwind CSS、Ant Design、Recharts、GSAP，独立目录 `frontend/` 并复用现有后端 API
 - 历史前端：Vue 3、JavaScript、Vite、Pinia、Vue Router、Axios、Element Plus、Markdown-it、DOMPurify、GSAP，位于 `vue-frontend/`，后续不再作为主要开发目标
 - 数据库：MySQL 8
 - 开发环境：Docker Compose 统一运行 MySQL、Alembic 迁移、FastAPI 后端和 React/Vite 前端
+- RAG 内部服务不映射宿主机端口；普通后端启动不等待 RAG。`rag_model_cache` 仅 TEI 可写，后端/Worker 只读；文档使用 `rag_documents`，向量与队列分别使用 `qdrant_data`、`rag_redis_data`。
 - 包管理：前端优先使用 pnpm
 
 注意：当前主前端使用 React + TypeScript。历史 Vue 前端使用 JavaScript，不作为后续新功能开发目标。
@@ -286,6 +288,7 @@ Final = 0.90 × BaseFinal + 0.10 × FeedbackScore  # 已有反馈
 
 ## 文档先行约定
 
+- V3 按合并规格与计划分阶段开发、验证和提交；当前获准在 `dev` 原地工作、下载依赖/镜像/模型和运行测试。不得自动推送或把测试数据写入许可扩大为清空业务数据；实际业务库迁移仍需列明迁移、备份、恢复并获得对应授权。
 - 每次做功能更新前，先确认会影响哪些文档；如果需求、接口、数据结构或交互行为不清楚，先补充或更新设计/说明文档，再改代码。
 - 每次完成后端接口、前端功能、数据库结构、配置项、评分规则或模型调用逻辑变更时，必须同步更新对应文档。
 - 功能实现状态统一维护在 `docs/system-features-status.md`；当功能从“未实现”变为“部分实现”或“已实现”时，需要同步更新该文档。

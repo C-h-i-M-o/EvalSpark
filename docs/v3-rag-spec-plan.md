@@ -10,7 +10,7 @@
 
 **规格位置：** 本文第 1—8 节；实施与验收位置：第 9—12 节。
 
-**状态：** 2026-09-02 设计文档基线；业务代码尚未实施。用户已批准讨论中的设计和本文编写，并允许每个开发阶段形成一个本地 Git 提交；写成文档后的复核是进入代码阶段的前置检查点。
+**状态：** 2026-09-02 用户已确认本文并批准开发；阶段 0 提交为 `63d7777`，阶段 1 代码和验收完成（提交 ID 见 Git 日志）。按用户要求直接使用当前 `dev`，不创建 worktree；允许依赖/镜像/模型下载及新增服务、测试容器运行和测试数据写入。每阶段验证后单独提交，不自动推送；阶段 2—7 尚未实施。
 
 ## 全局约束
 
@@ -21,8 +21,8 @@
 - 优先复用现有代码、开源解析器和官方客户端，不手写 PDF/DOCX 解析器、向量数据库或 Embedding 推理服务。
 - 前后端、数据库、迁移、测试及新增服务均通过 Docker 执行，不恢复宿主机 Python/Node/pnpm 开发流程。
 - 文件修改需明确授权；数据库写入、迁移、测试数据创建和删除需明确且范围匹配的授权。
-- 本轮只创建本文及文档提交，不实现业务代码、不下载依赖或模型、不启动新服务、不访问或修改业务数据库。
-- 后续下载、服务启动和数据库验收分别在对应阶段请求授权；Git 提交授权不等于这些操作的授权。
+- 阶段 0 仅创建文档；后续开发已获批准。业务库结构迁移前仍需列明实际迁移内容、备份和恢复方案，不把测试写入许可当作清空业务数据的许可。
+- 已获准下载依赖、镜像和模型，并运行新增服务与隔离测试。不得自行写入真实模型配置、发送用户私有文档到未经指定的外部服务或进行无关数据库操作。
 - 不执行 `docker compose down -v`，不删除既有 Volume，不重命名或重建现有数据库，不自动推送、合并或改写 Git 历史。
 - 详细功能状态、API、数据结构、架构随实施阶段同步更新；不得把本计划中的能力提前标记为“已实现”。
 
@@ -359,7 +359,7 @@ Final = 0.90 × BaseFinal + 0.10 × FeedbackScore          # 有反馈
 | 阶段 | 独立交付物 | 计划提交标题 | 状态 |
 | --- | --- | --- | --- |
 | 0 | 合并规格/计划、授权边界与验收矩阵 | `docs(rag): 明确 V3 RAG 设计与分阶段实施计划` | 本次文档基线 |
-| 1 | Docker 依赖、类型化客户端与分词缓存接入 | `build(rag): 增加私有检索基础设施与客户端` | 未开始 |
+| 1 | Docker 依赖、类型化客户端与分词缓存接入 | `build(rag): 增加私有检索基础设施与客户端` | 代码和验收完成 |
 | 2 | 私有知识库与文档管理、增量模型迁移 | `feat(rag): 新增私有知识库与文档管理` | 未开始 |
 | 3 | 可恢复的异步解析、切分、索引和清理 | `feat(rag): 实现异步索引与可恢复生命周期` | 未开始 |
 | 4 | 逐模型检索回答内核、快照和用量 | `feat(rag): 实现逐模型检索回答与证据快照` | 未开始 |
@@ -383,15 +383,42 @@ Final = 0.90 × BaseFinal + 0.10 × FeedbackScore          # 有反馈
 
 ### 阶段 1：Docker 与客户端
 
-**文件：** 修改 `docker-compose.yml`、`.env.example`、`backend/pyproject.toml`、`backend/Dockerfile.dev`、`backend/app/core/config.py`；新增 `backend/app/services/rag/__init__.py`、`clients.py`、`backend/app/worker.py` 和 `backend/tests/test_rag_clients.py`、`test_rag_configuration.py`。新增依赖为 `qdrant-client`、`celery[redis]`、`huggingface-hub`、`tokenizers`；HTTP 复用已有 `httpx`。同步 `docs/docker-development-spec-plan.md`、`docs/open-source-reuse.md` 与本文版本记录。
+**文件：** 修改 `docker-compose.yml`、`.env.example`、`backend/pyproject.toml`、`backend/app/core/config.py`，复用现有 `backend/Dockerfile.dev`（无需修改）；新增 `backend/app/services/rag/__init__.py`、`clients.py`、`backend/app/worker.py` 和 `backend/tests/test_rag_clients.py`、`test_rag_configuration.py`。新增依赖为 `qdrant-client`、`celery[redis]`、`huggingface-hub`、`tokenizers`；HTTP 复用已有 `httpx`。同步 Docker、开源复用、架构、功能状态、README/AGENTS 与本文版本记录。
 
 **接口：** `EmbeddingClient.embed(texts: list[str], kind: Literal["query", "document"]) -> list[list[float]]` 为异步方法；`load_tokenizer() -> tokenizers.Tokenizer` 只读本地缓存。`VectorClient.search(user_id: int, knowledge_base_id: int, versions: list[tuple[int, int]], vector: list[float], limit: int = 5)` 为异步查询，返回包含 chunk ID、版本和相似度的类型化列表；不返回任意用户传入的过滤器。
 
-- [ ] 写客户端测试，以 `httpx.MockTransport` 截获 TEI 请求，验证 query 有指令、document 无指令、截断关闭；对 1023 维、NaN、数量不符响应断言失败。
-- [ ] 在 Docker 单元测试环境运行新增测试，确认失败来自尚缺实现，而非错误数据库配置。
-- [ ] 用官方客户端/HTTP API 实现上述窄接口，加入内部服务地址和有界超时配置；普通 health 不探测 TEI。配置私有 Volume 与固定版本流程。
-- [ ] 在获取下载/构建许可后，核对官方版本和公告，固定 digest/revision，构建镜像；未获许可则停在此门禁，不宣称客户端实连通过。
-- [ ] 运行单元测试和 Compose 静态校验，保存返回向量维度、缓存复用和断开 TEI 后普通 health 的授权实测记录，再审查本阶段差异并提交。
+本阶段实施参数：TEI/Qdrant/Redis 采用 Compose 内网地址；后端与 Worker 只读挂载模型缓存到 `/data`，原文单独挂载到 `/documents`。查询指令纳入 Token 计数，每批最多 16 条、默认总计 2048 Token，超出单批 Token 上限的单条输入直接拒绝，不截断。网络超时默认 60 秒。Qdrant 集合及维度固定，不随任意客户端请求变化。
+
+TEI 1.9.3 资源实测调整：初始 8192 Token CPU 预热已占满 4 GiB 容器；32K 方案不进入实机运行。根据[官方启动实现](https://github.com/huggingface/text-embeddings-inference/blob/v1.9.3/router/src/lib.rs)与[预热实现](https://github.com/huggingface/text-embeddings-inference/blob/v1.9.3/backends/src/lib.rs)，改为服务端/客户端共用 `RAG_EMBEDDING_MAX_BATCH_TOKENS=2048`，服务端 `--auto-truncate true` 仅用于允许低于模型 32K 的运行上限。项目始终调用 `/embed` 并显式发送 `truncate=false`；[官方请求处理](https://github.com/huggingface/text-embeddings-inference/blob/v1.9.3/router/src/http/server.rs)优先使用请求字段，超限由客户端或 TEI 拒绝，不能通过省略字段或改用 `/v1/embeddings` 绕过。提高上限必须单独验证资源，不代表 32K 能力已通过。
+
+2026-09-02 固定版本：Qdrant 服务/客户端 `1.19.0`；TEI `1.9.3`（CPU 镜像系列 `cpu-1.9`）；Redis 服务 `7.2.16-bookworm`；Celery `5.6.3`、redis-py `6.4.0`、huggingface-hub `1.29.0`、tokenizers `0.23.1`。新增依赖已在 Python 3.12 后端镜像成功安装。模型 revision 为 `97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3`；官方公告核对与限制见 `open-source-reuse.md`。
+
+实际拉取并固定的 `linux/amd64` 镜像 digest：
+
+| 镜像 | SHA256 |
+| --- | --- |
+| TEI `cpu-1.9` | `c26a226262ad4ff3330fb30b76653c1bb65da2fcf413b92284545a010e0a8a48` |
+| Qdrant `v1.19.0` | `6c0652f8d6925b22f2f6f0e0a5365a6c9dbc8768bd6e70ccc1cdc14847e452a0` |
+| Redis `7.2.16-bookworm` | `e17e3a1993da428251cbd88dbdb3de8c8d4007f840d7350eb17a2d8695fa705f` |
+
+阶段 1 验证记录（2026-09-02）：
+
+- 客户端/配置由预期红色测试转绿（48 项），覆盖实际请求结构、错误响应、超时、数值溢出和越权/过期元数据。
+- Docker 全量后端回归：`201 passed, 4 skipped, 6 warnings`。4 项跳过原因是测试容器不安装 Docker CLI；将宿主机实际解析并脱敏的 Compose JSON 通过 stdin 传入断网测试容器，单独执行相同 4 项契约，全部通过。6 项 warning 为既有 Starlette/httpx 弃用提示与测试 JWT 短 key，不是新增失败。
+- 后端新增依赖镜像构建成功，源码按开发 Compose 的 bind mount 方式验证。无业务库迁移、无业务表写入、未调用收费外部模型 API；API/数据库说明已核对，本阶段无需改动。
+- 独立 `--network none` 容器中的真实 Uvicorn `/api/health` 返回 `200 {"status":"ok"}`，验证后已停止并自动移除该临时容器；该检查不代替普通评测真实模型端到端回归。
+- 真实 Qwen 分词器在后端、Worker 的只读共享缓存均加载成功。首次权重下载约 1029 秒；重建 TEI 容器后权重命中缓存（日志耗时约 58 微秒），无需重下权重。TEI 启动仍会检查部分仓库文件，本阶段不宣称无网络冷启动通过。
+- TEI `/info` 确认版本 `1.9.3`、固定模型 SHA、`float32`、`last_token` pooling、2048 输入上限；CPU 后端实际内部批次限制为 4（客户端请求可含 16 条，由服务排队执行）。2048 配置加载约 19 秒、预热约 68 秒，预热采样约 2.64 GiB，不是内存峰值测量。
+- 非敏感样本“北京是中国的首都。”/“香蕉是一种水果。”及查询“中国的首都是哪里？”返回三个 1024 维向量，范数约 1，相关/无关相似度约 `0.6616 / 0.1790`。两次 Embedding 请求及健康/超限检查合计约 0.869 秒；这不是大文档或并发性能基准。
+- 超限输入在客户端直接拒绝；绕过客户端向 TEI 发送 `truncate=false` 也返回 `422`，没有静默截断。初次实测脚本曾误期望 `413`，按服务实际验证错误码修正断言后通过，未改动服务错误处理。
+- Qdrant `/readyz` 返回 200，Redis PING 与 Celery inspect ping 返回 PONG，Worker 正常在线。未创建业务向量集合或登记文档作业，这些属于后续阶段。
+- 完成当前阶段代码自审、README/AGENTS 和配套文档一致性检查；未使用子代理、未修改 Vue、未推送远端。
+
+- [x] 写客户端测试，以 `httpx.MockTransport` 截获 TEI 请求，验证 query 有指令、document 无指令、截断关闭；对 1023 维、NaN、数量不符响应断言失败。
+- [x] 在 Docker 单元测试环境运行新增测试，确认失败来自尚缺实现，而非错误数据库配置。
+- [x] 用官方客户端/HTTP API 实现上述窄接口，加入内部服务地址和有界超时配置；普通 health 不探测 TEI。配置私有 Volume 与固定版本流程。
+- [x] 在获取下载/构建许可后，核对官方版本和公告，固定 digest/revision，构建镜像；未获许可则停在此门禁，不宣称客户端实连通过。
+- [x] 运行单元测试和 Compose 静态校验，保存返回向量维度、缓存复用和断开 TEI 后普通 health 的授权实测记录，再审查本阶段差异并提交。
 
 核心拒绝测试应包含实际断言：
 
@@ -573,8 +600,8 @@ docker compose run --rm --no-deps frontend pnpm build
 
 | 检查项 | 必须记录的证据 | 当前结果 |
 | --- | --- | --- |
-| 文档基线 | 差异检查、覆盖自检、提交 ID | 本轮记录于交付回复 |
-| 依赖版本 | 镜像 digest、模型 SHA、包版本、兼容性结果 | 未执行 |
+| 文档基线 | 差异检查、覆盖自检、提交 ID | 阶段 0：`63d7777`；阶段 1 见 Git 日志 |
+| 依赖版本 | 镜像 digest、模型 SHA、包版本、兼容性结果 | 阶段 1 已验证，见第 10 节版本与实测记录 |
 | 数据升级 | 隔离库迁移前后结构、旧任务兼容、无历史改分 | 未执行 |
 | 索引 | 四格式来源、块上限、重复/中断恢复、版本过滤 | 未执行 |
 | 评测 | 两候选不同查询与证据、Top-5、失败隔离、流式事件 | 未执行 |
@@ -582,8 +609,8 @@ docker compose run --rm --no-deps frontend pnpm build
 | 权限 | 所有者/其他用户/管理员的内容与互动访问矩阵 | 未执行 |
 | 删除 | 当前文件/文本/向量清理，历史快照保留且不可越权 | 未执行 |
 | 前端 | Vitest、TypeScript/Vite 构建、浏览器关键路径 | 未执行 |
-| 实际部署 | Docker 实连、普通评测降级隔离、模型调用结果 | 未执行 |
-| 性能与容量 | 实测样本规模、耗时、内存；未测上限明确披露 | 未执行 |
+| 实际部署 | Docker 实连、普通评测降级隔离、模型调用结果 | 基础依赖实连、CPU Embedding、Worker、断网 health 通过；完整 RAG 未执行 |
+| 性能与容量 | 实测样本规模、耗时、内存；未测上限明确披露 | 仅阶段 1 短文本/预热采样；大文档、并发、100,000 块容量与峰值未测 |
 
 每阶段交付使用“提交 ID + 已完成范围 + 验证证据 + 未覆盖/下一门禁”的简短格式。只有对应测试和实际环境证据存在时才标记已完成；测试代码写好不等于测试执行通过。
 

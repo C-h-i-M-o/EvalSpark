@@ -24,7 +24,7 @@ def _compose_config() -> dict[str, Any]:
     )
     assert result.returncode == 0, result.stderr
     config: dict[str, Any] = json.loads(result.stdout)
-    safe_environment_keys = {"VITE_BACKEND_TARGET", "CHOKIDAR_USEPOLLING"}
+    safe_environment_keys = {"VITE_BACKEND_TARGET", "CHOKIDAR_USEPOLLING", "RAG_EMBEDDING_MAX_BATCH_TOKENS"}
     for service in config.get("services", {}).values():
         environment = service.get("environment")
         if environment:
@@ -49,8 +49,28 @@ def _read_env_example() -> dict[str, str]:
 def test_compose_defines_the_full_development_stack() -> None:
     config = _compose_config()
 
-    assert set(config["services"]) == {"mysql", "migrate", "backend", "frontend"}
-    assert set(config["volumes"]) == {"mysql_data", "frontend_node_modules"}
+    assert set(config["services"]) == {
+        "mysql", "migrate", "backend", "frontend", "embedding", "qdrant", "redis", "rag-worker"
+    }
+    assert set(config["volumes"]) == {
+        "mysql_data", "frontend_node_modules", "rag_model_cache", "rag_documents", "qdrant_data", "rag_redis_data"
+    }
+
+
+def test_rag_services_stay_internal_and_do_not_gate_ordinary_evaluation() -> None:
+    services = _compose_config()["services"]
+
+    for name in ("embedding", "qdrant", "redis", "rag-worker"):
+        assert not services[name].get("ports")
+    assert set(services["backend"]["depends_on"]) == {"migrate"}
+    assert services["rag-worker"]["image"] == services["backend"]["image"]
+    command = services["embedding"]["command"]
+    assert command[command.index("--hostname") + 1] == "0.0.0.0"
+    assert command[command.index("--max-batch-tokens") + 1] == services["backend"]["environment"]["RAG_EMBEDDING_MAX_BATCH_TOKENS"]
+    for name in ("backend", "rag-worker"):
+        cache = next(mount for mount in services[name]["volumes"] if mount["target"] == "/data")
+        assert cache["source"] == "rag_model_cache"
+        assert cache["read_only"] is True
 
 
 def test_compose_keeps_mysql_internal_and_orders_service_startup() -> None:

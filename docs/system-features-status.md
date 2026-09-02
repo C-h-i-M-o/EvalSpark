@@ -1,6 +1,6 @@
 # 系统功能与实现状态
 
-最后更新：2026-07-05
+最后更新：2026-09-02
 
 当前版本：**v2 已结束并冻结**。demo-v1 核心评测闭环保持可用，账号体系、权限控制、公开/私有评测、管理员模型配置、Token 额度和反馈统计等已实现能力继续保留。React 前端已经完成对原 Vue 前端的功能替代，后续新功能和样式维护默认使用 `frontend/`。
 
@@ -12,11 +12,17 @@
 
 ## 1. 系统定位
 
+### V3 RAG 实施状态
+
+状态：**部分实现（基础设施与客户端）**。新增 TEI CPU/Qwen3-Embedding-0.6B、Qdrant、Redis、Celery Worker 配置和固定版本只读分词缓存；客户端支持双上限分批、向量校验、错误脱敏及归属/版本过滤。详见 `v3-rag-spec-plan.md` 的阶段 1 验收记录。
+
+知识库管理、四格式解析、异步索引、逐模型 RAG 回答、引用快照、忠实度评分及 React 页面尚未实现；没有开放 RAG API 或导航入口。原普通评测与数据库结构不变，Agent 工具评测和安全测试集尚待单独设计。
+
 MultiChatEval 是一个面向多模型问答的对话质量评估系统。用户输入同一个问题后，可以选择多个模型并发回答，系统展示每个模型的回答内容、耗时、输出长度、成本估算和规则评分，帮助用户横向比较不同模型的回答质量。
 
 当前版本优先保证多模型、规则评分、LLM Judge、逐 token 流式展示、历史任务查询和用户反馈的完整链路。系统已经可以从前端发起评测请求，并由后端并发调用真实 OpenAI-compatible 模型接口；各模型生成过程会以 NDJSON 增量事件实时展示，单个模型回答完成后进入“评分中……”，评分完成后更新为最终结果。评测任务、回答、评分、点赞/点踩和公开评论会写入 MySQL，并可在历史任务页继续查看和操作。
 
-当前 React 主前端已落地：`frontend/` 已提供 React 19 + TypeScript + Vite 工程、Tailwind CSS、Ant Design、Recharts、GSAP、Vite `/api` 开发代理、类型化 API 客户端、系统健康检查、登录态恢复、登录、注册、退出、受保护业务路由、基础业务布局、按角色导航、`/` 评测工作台、`/history` 历史任务、`/models` 管理员模型配置、`/users` 用户额度和 `/feedback` 反馈统计页面。评测工作台已支持模型列表、今日 Token、公开/私有、思考模式、LLM 评审、多模型逐 token NDJSON 展示、评分中状态、卡片内 Markdown 与数学公式渲染、`<think>` 默认展开、评分详情和点赞/点踩反馈。历史页已支持分页、详情加载、状态标记、超时提示、反馈操作和公开评论分页、发布、删除。管理员页面已支持模型配置维护、连接测试、用户搜索筛选、服务端分页、封号/解封和普通用户每日 Token 额度调整。反馈统计已支持普通用户个人统计和管理员全局统计、每日趋势、互动明细。React 前端已补充品牌 logo、深色侧栏、主题色层和遵循减少动态效果偏好的 GSAP 页面/卡片/弹窗动画。Windows 开发环境可通过 `scripts/start-local.ps1` 连接本地 MySQL 并一键启动 React 主前端全栈项目；`scripts/start-local.sh` 继续用于 Docker MySQL 环境，`scripts/start-local-vue.sh` 可启动历史 Vue 版本，`scripts/verify-react-rewrite.sh` 可运行后端、React、Vue 和 diff 验收。
+当前 React 主前端已落地：`frontend/` 已提供 React 19 + TypeScript + Vite 工程、Tailwind CSS、Ant Design、Recharts、GSAP、Vite `/api` 开发代理、类型化 API 客户端、系统健康检查、登录态恢复、登录、注册、退出、受保护业务路由、基础业务布局、按角色导航、`/` 评测工作台、`/history` 历史任务、`/models` 管理员模型配置、`/users` 用户额度和 `/feedback` 反馈统计页面。评测工作台已支持模型列表、今日 Token、公开/私有、思考模式、LLM 评审、多模型逐 token NDJSON 展示、评分中状态、卡片内 Markdown 与数学公式渲染、`<think>` 默认展开、评分详情和点赞/点踩反馈。历史页已支持分页、详情加载、状态标记、超时提示、反馈操作和公开评论分页、发布、删除。管理员页面已支持模型配置维护、连接测试、用户搜索筛选、服务端分页、封号/解封和普通用户每日 Token 额度调整。反馈统计已支持普通用户个人统计和管理员全局统计、每日趋势、互动明细。React 前端已补充品牌 logo、深色侧栏、主题色层和遵循减少动态效果偏好的 GSAP 页面/卡片/弹窗动画。Windows 使用 `scripts/start-local.ps1`，macOS/Linux 使用 `scripts/start-local.sh`；两者统一在 Docker Compose 中启动 MySQL、迁移、后端和 React 前端。V3 增加 RAG 内网服务；历史 Vue 脚本仅用于回看旧版本，不参与后续开发或本次验收。
 
 ## 2. 前端功能
 
@@ -661,7 +667,7 @@ final =
 
 已有能力：
 
-- `docker-compose.yml` 统一提供 `mysql`、`migrate`、`backend` 和 `frontend` 四个开发服务，并通过健康状态控制启动顺序。
+- `docker-compose.yml` 保留 `mysql`、`migrate`、`backend`、`frontend` 四个原开发服务，新增 `embedding`、`qdrant`、`redis`、`rag-worker`；RAG 内部服务不影响普通后端启动依赖。
 - `scripts/start-local.ps1` 与 `scripts/start-local.sh` 都只依赖 Docker Desktop 和 Docker Compose，可校验 `.env` 后构建并启动完整 React 主前端全栈环境。
 - MySQL 只开放 Compose 内部端口，数据保存在 `mysql_data`；Alembic 迁移成功后后端才启动，后端健康后前端才启动。
 - 后端与 React 前端均挂载本地源码并保留热更新；Python 依赖位于镜像中，前端依赖位于 `frontend_node_modules` 命名卷中。

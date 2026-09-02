@@ -1,6 +1,8 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
+from pydantic import AnyHttpUrl, Field, RedisDsn
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
@@ -15,6 +17,20 @@ class Settings(BaseSettings):
     jwt_secret_key: str = "development-only-change-this-secret-before-production-2026"
     access_token_expire_minutes: int = 480
     auth_cookie_secure: bool = False
+
+    # RAG 依赖只在实际调用时连接，普通评测不等待模型缓存就绪。
+    rag_embedding_url: AnyHttpUrl = AnyHttpUrl("http://embedding:80")
+    rag_qdrant_url: AnyHttpUrl = AnyHttpUrl("http://qdrant:6333")
+    rag_redis_url: RedisDsn = RedisDsn("redis://redis:6379/0")
+    rag_embedding_model: Literal["Qwen/Qwen3-Embedding-0.6B"] = "Qwen/Qwen3-Embedding-0.6B"
+    rag_embedding_revision: str = Field(
+        default="97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3", pattern=r"^[0-9a-f]{40}$"
+    )
+    rag_embedding_batch_size: int = Field(default=16, ge=1, le=16)
+    rag_embedding_max_batch_tokens: int = Field(default=2048, ge=1, le=32768)
+    rag_embedding_timeout_seconds: float = Field(default=60, gt=0, le=300)
+    rag_model_cache_dir: Path = Path("/data")
+    rag_documents_dir: Path = Path("/documents")
 
     model_config = SettingsConfigDict(env_file=ENV_FILE, env_file_encoding="utf-8", extra="ignore")
 
