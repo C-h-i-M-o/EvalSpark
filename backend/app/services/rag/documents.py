@@ -1,26 +1,40 @@
+from __future__ import annotations
+
 import codecs
 import hashlib
+import json
 import os
 import re
+import subprocess
+import sys
 import tempfile
 import zipfile
 import zlib
+from array import array
+from bisect import bisect_left, bisect_right
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from pydantic import TypeAdapter
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 from starlette.formparsers import MultiPartException, MultiPartParser
 from starlette.requests import Request
 
 from app.core.config import settings
+from app.schemas.knowledge_base import DocxSource, PdfSource, SourceLocation, TextSource
 from app.services.rag.errors import KnowledgeBaseError
+
+if TYPE_CHECKING:
+    from tokenizers import Tokenizer
 
 MAX_FILE_BYTES = 20_000_000
 MAX_MULTIPART_BYTES = MAX_FILE_BYTES + 65_536
+MAX_EXTRACTED_CHARACTERS = 20_000_000
 MEDIA_TYPES = {
     ".pdf": "application/pdf",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -176,3 +190,189 @@ def _store_upload(upload: UploadFile, root: Path) -> StoredDocument:
 async def store_upload(upload: UploadFile, *, root: Path = settings.rag_documents_dir) -> StoredDocument:
     # 文件复制和轻量校验放在线程池，API 事件循环不做同步磁盘工作。
     return await run_in_threadpool(_store_upload, upload, root)
+
+
+@dataclass(frozen=True)
+class SourceBlock:
+    text: str
+    source: SourceLocation
+    markdown: bool = False
+    heading: bool = False
+
+
+@dataclass(frozen=True)
+class DocumentChunk:
+    text: str
+    token_count: int
+    source: SourceLocation
+
+
+def _parse_in_subprocess(path: Path, media_type: str) -> list[SourceBlock]:
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "app.services.rag.parsing", str(path), media_type],
+            capture_output=True, timeout=120, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        raise KnowledgeBaseError("parse_timeout", "文档解析超时，请拆分文档", 415) from None
+    except OSError:
+        raise KnowledgeBaseError("parser_unavailable", "文档解析进程暂时不可用", 503) from None
+    if result.returncode != 0:
+        raise KnowledgeBaseError("document_too_complex", "文档解析进程超过资源限制或异常退出", 415)
+    try:
+        payload = json.loads(result.stdout)
+        if "error" in payload:
+            raise KnowledgeBaseError(payload["error"], payload["message"], payload["status"])
+        source_adapter = TypeAdapter(SourceLocation)
+        return [SourceBlock(
+            item["text"], source_adapter.validate_python(item["source"]), item["markdown"], item["heading"],
+        ) for item in payload["blocks"]]
+    except KnowledgeBaseError:
+        raise
+    except (ValueError, KeyError, TypeError):
+        raise KnowledgeBaseError("parser_invalid_response", "文档解析结果无效", 415) from None
+
+
+async def parse_in_subprocess(path: Path, media_type: str) -> list[SourceBlock]:
+    # 子进程限制复杂文档的资源消耗，等待工作交给线程池，事件循环可继续续租。
+    return await run_in_threadpool(_parse_in_subprocess, path, media_type)
+
+
+def parse_document(path: Path, media_type: str) -> list[SourceBlock]:
+    """仅负责提取；实际 Worker 在受资源限制的子进程调用本函数。"""
+    extension = next((key for key, value in MEDIA_TYPES.items() if value == media_type), None)
+    if extension is None:
+        raise KnowledgeBaseError("unsupported_file", "文档类型不受支持", 415)
+    blocks: list[SourceBlock] = []
+    total = 0
+
+    def append(block: SourceBlock) -> None:
+        nonlocal total
+        total += len(block.text)
+        if total > MAX_EXTRACTED_CHARACTERS:
+            raise KnowledgeBaseError("document_too_complex", "提取文本超过处理上限，请拆分文档", 415)
+        if block.text.strip():
+            blocks.append(block)
+
+    try:
+        if path.stat().st_size > MAX_FILE_BYTES:
+            raise KnowledgeBaseError("file_too_large", "单个文件不能超过 20 MB", 413)
+        _validate_file(path, extension)
+        if extension in (".txt", ".md"):
+            text = path.read_text(encoding="utf-8-sig")
+            line_count = text.count("\n") + (0 if text.endswith("\n") else 1)
+            append(SourceBlock(text, TextSource(line_start=1, line_end=max(1, line_count)), markdown=extension == ".md"))
+        elif extension == ".pdf":
+            from pypdf import PdfReader
+            with path.open("rb") as stream:
+                reader = PdfReader(stream, strict=True)
+                if reader.is_encrypted:
+                    raise KnowledgeBaseError("encrypted_document", "暂不支持加密文档，请上传未加密版本", 415)
+                for index, page in enumerate(reader.pages, 1):
+                    append(SourceBlock((page.extract_text() or "").strip(), PdfSource(page_start=index, page_end=index)))
+        else:
+            from docx import Document
+            from docx.table import Table
+            from docx.text.paragraph import Paragraph
+
+            def table_text(table: Table, depth: int = 0) -> str:
+                if depth > 32:
+                    raise KnowledgeBaseError("document_too_complex", "表格嵌套过深，请简化文档", 415)
+                rows = []
+                seen = set()
+                for row in table.rows:
+                    cells = []
+                    for cell in row.cells:
+                        # python-docx 会把合并单元格映射为重复视图，只提取一次。
+                        if cell._tc in seen:
+                            continue
+                        seen.add(cell._tc)
+                        cells.append("\n".join(
+                            item.text if isinstance(item, Paragraph) else table_text(item, depth + 1)
+                            for item in cell.iter_inner_content()
+                        ))
+                    rows.append("\t".join(cells))
+                return "\n".join(rows)
+
+            document = Document(path)
+            for index, item in enumerate(document.iter_inner_content(), 1):
+                is_paragraph = isinstance(item, Paragraph)
+                append(SourceBlock(
+                    item.text if is_paragraph else table_text(item),
+                    DocxSource(block_start=index, block_end=index, block_type="paragraph" if is_paragraph else "table"),
+                    heading=is_paragraph and item.style is not None and item.style.name.startswith("Heading"),
+                ))
+    except KnowledgeBaseError:
+        raise
+    except MemoryError:
+        raise KnowledgeBaseError("document_too_complex", "文档解析超出内存上限，请拆分文档", 415) from None
+    except Exception:
+        raise KnowledgeBaseError("invalid_file", "文档损坏或无法解析，请检查文件格式", 415) from None
+    if not blocks:
+        if extension == ".pdf":
+            raise KnowledgeBaseError("pdf_no_text", "暂不支持扫描件，请上传可提取文本的 PDF", 415)
+        raise KnowledgeBaseError("document_no_text", "文档中没有可提取的文本", 415)
+    return blocks
+
+
+def split_blocks(blocks: list[SourceBlock], tokenizer: Tokenizer, chunk_size: int, overlap: int) -> list[DocumentChunk]:
+    from semantic_text_splitter import MarkdownSplitter, TextSplitter
+
+    if type(chunk_size) is not int or type(overlap) is not int or not 128 <= chunk_size <= 2048 or not 0 <= overlap < chunk_size:
+        raise KnowledgeBaseError("invalid_chunking", "切块大小或重叠 Token 数无效", 422)
+    if not blocks or len({block.source.kind for block in blocks}) != 1:
+        raise KnowledgeBaseError("invalid_source", "文档来源为空或类型不一致", 415)
+    tokenizer.no_truncation()
+    tokenizer.no_padding()
+    parts: list[str] = []
+    starts: list[int] = []
+    ends: list[int] = []
+    line_breaks: list[array] = []
+    position = 0
+    for block in blocks:
+        if parts:
+            separator = "\n\n\n" if block.heading else "\n\n"
+            parts.append(separator)
+            position += len(separator)
+        starts.append(position)
+        parts.append(block.text)
+        position += len(block.text)
+        ends.append(position)
+        # 紧凑索引避免大量短行创建大量 Python int/源块对象。
+        line_breaks.append(array("I", (match.start() for match in re.finditer("\n", block.text))) if isinstance(block.source, TextSource) else array("I"))
+    text = "".join(parts)
+    splitter_type = MarkdownSplitter if blocks[0].markdown else TextSplitter
+    # 开源切分器仅计算正文 Token；Qwen 在推理输入末尾另加 EOS，需预留相同开销。
+    capacity = chunk_size - tokenizer.num_special_tokens_to_add(False)
+    splitter = splitter_type.from_huggingface_tokenizer(tokenizer, capacity, overlap=min(overlap, capacity - 1), trim=True)
+    chunks: list[DocumentChunk] = []
+    covered_until = 0
+    for start, content in splitter.chunk_indices(text):
+        end = start + len(content)
+        if text[start:end] != content or end <= covered_until or text[covered_until:start].strip():
+            raise KnowledgeBaseError("invalid_chunk_location", "切块来源覆盖校验失败", 415)
+        covered_until = end
+        token_count = len(tokenizer.encode(content, add_special_tokens=True).ids)
+        if not 0 < token_count <= chunk_size:
+            raise KnowledgeBaseError("chunk_too_large", "切块 Token 复核失败，不能截断后索引", 415)
+        first = bisect_right(ends, start)
+        last = bisect_left(starts, end) - 1
+        left, right = blocks[first].source, blocks[last].source
+        if isinstance(left, TextSource) and isinstance(right, TextSource):
+            source: SourceLocation = TextSource(
+                line_start=left.line_start + bisect_left(line_breaks[first], start - starts[first]),
+                line_end=right.line_start + bisect_left(line_breaks[last], end - 1 - starts[last]),
+            )
+        elif isinstance(left, PdfSource) and isinstance(right, PdfSource):
+            source = PdfSource(page_start=left.page_start, page_end=right.page_end)
+        elif isinstance(left, DocxSource) and isinstance(right, DocxSource):
+            kinds = {item.source.block_type for item in blocks[first:last + 1] if isinstance(item.source, DocxSource)}
+            source = DocxSource(block_start=left.block_start, block_end=right.block_end, block_type=left.block_type if len(kinds) == 1 else "mixed")
+        else:
+            raise KnowledgeBaseError("invalid_source", "来源类型无法匹配", 415)
+        chunks.append(DocumentChunk(content, token_count, source))
+        if len(chunks) > 100_000:
+            raise KnowledgeBaseError("chunk_limit", "切块数量超过知识库上限", 415)
+    if not chunks or text[covered_until:].strip():
+        raise KnowledgeBaseError("invalid_chunk_location", "文档内容未被完整切分", 415)
+    return chunks

@@ -153,7 +153,11 @@ class KnowledgeBaseService:
             job = RagJob(id=job_id, knowledge_base_id=kb.id, document_id=document.id if document else None, operation=operation, target_revision=revision)
             db.add(job)
         elif job.status == "failed":
-            job.status, job.stage, job.error_code, job.dispatched_at = "queued", "queued", None, None
+            # 人工重试生成新版本，保留旧领取代次和在途请求冷却窗口。
+            kb.content_revision += 1
+            if document is not None:
+                document.index_revision += 1
+            return await self._job(db, kb, operation, document)
         await db.flush()
         return job
 

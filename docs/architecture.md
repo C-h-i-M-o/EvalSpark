@@ -40,13 +40,17 @@ mysql:3306（仅 Compose 内部网络）
 
 ## 核心流程
 
-### V3 RAG 基础设施（阶段 1）
+### V3 RAG 基础设施与异步索引（阶段 1—3）
 
-阶段 1 基础设施已完成，阶段 2 新增私有知识库管理 API；尚未开放 RAG 评测执行入口。`app/services/rag/clients.py` 通过 HTTP 调用内网 TEI，使用官方 Qdrant SDK 查询；`app/worker.py` 提供 Celery 配置，阶段 3 才注册文档作业。
+阶段 1 基础设施与阶段 2 私有知识库管理 API 已完成，阶段 3 已注册文档作业，尚在完整服务验收；未开放 RAG 评测执行入口。`app/services/rag/clients.py` 通过 HTTP 调用内网 TEI，使用官方 Qdrant SDK 存取与查询；`app/worker.py` 注册 Celery 作业和启动/每 60 秒的数据库恢复入口。
 
 知识库路由复用 Cookie/RBAC 登录态，库和文档授权始终按当前用户过滤，管理员没有私有内容豁免。`knowledge_base_service.py` 管理库/文档版本、状态、行锁配额和作业事务；`rag/documents.py` 负责鉴权后的 multipart 限流、轻量格式检查和随机键文件存储。控制器不返回物理存储路径，下载仅为私有附件。
 
-文件先保存，再在库行锁内提交元数据与 `rag_jobs`，提交后通知队列；失败时只清理确认无引用的本次文件，提交结果不明时优先保留文件。事务开始前结束鉴权快照，防止 REPEATABLE READ 读到旧作业状态。阶段 2 任务尚未注册，诚实返回排队待投递；重试/重建/删除提高目标版本，清理与恢复将在阶段 3 落地。新五表及 `task_type=chat` 默认值通过增量 Alembic 提供，不回算旧评分。独立测试 Compose 已用于验证 SQL，业务库尚未升级。
+文件先保存，再在库行锁内提交元数据与 `rag_jobs`，提交后通知队列；失败时只清理确认无引用的本次文件，提交结果不明时优先保留文件。事务开始前结束鉴权快照，防止 REPEATABLE READ 读到旧作业状态。Worker 的 `rag/jobs.py` 以库锁和短事务领取租约，`attempt` 隔离旧执行代次；不持事务锁等待解析、模型或 Qdrant。过期租约和不确定写入均留出在途请求冷却窗口，自动重试最多 3 次，人工重试新建目标版本。
+
+`rag/parsing.py` 为受时间/地址空间限制的子进程入口；pypdf/python-docx 提取正文，`documents.py` 映射行/页/逻辑块并使用开源切分器和 Qwen Tokenizer。`rag/indexing.py` 先保存目标版本正文、再分批 Embedding/upsert，核对数量并复查版本后发布；同库全部活动作业结束后才恢复可用。删除先屏蔽新访问，串行清理全部版本向量、原文件、MySQL 块，再标记 deleted。索引旧版收尾不会碰当前版或其他库。
+
+Worker 不等待 Embedding 健康，模型离线也能恢复和清理。Celery 的恢复线程只传递作业 UUID，MySQL 为权威状态；每次异步调用创建并释放自己的连接池，避免跨事件循环或 fork 共用连接。新五表、`task_type=chat` 默认值及块正文 MEDIUMTEXT 通过增量 Alembic 提供，不回算旧评分。独立测试 Compose 已用于验证 SQL，业务库尚未升级。
 
 - TEI CPU 加载固定 revision 的 Qwen3-Embedding-0.6B，输出 1024 维向量；查询带检索指令，文档不带指令。
 - TEI 独占模型缓存写权限。后端/Worker 使用同卷的只读 `tokenizer.json`，只按固定 revision 本地加载，不联网回退、不加载模型权重。

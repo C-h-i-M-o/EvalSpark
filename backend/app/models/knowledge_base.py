@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.dialects.mysql import MEDIUMTEXT
 
 from app.db.base import Base
 
@@ -61,7 +62,7 @@ class KnowledgeChunk(Base):
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"))
     index_revision: Mapped[int] = mapped_column()
     chunk_index: Mapped[int] = mapped_column()
-    text: Mapped[str] = mapped_column(Text)
+    text: Mapped[str] = mapped_column(Text().with_variant(MEDIUMTEXT(), "mysql"))
     token_count: Mapped[int] = mapped_column()
     source_json: Mapped[dict[str, object]] = mapped_column(JSON)
 

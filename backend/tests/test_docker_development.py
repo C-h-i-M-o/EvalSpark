@@ -64,6 +64,7 @@ def test_rag_services_stay_internal_and_do_not_gate_ordinary_evaluation() -> Non
         assert not services[name].get("ports")
     assert set(services["backend"]["depends_on"]) == {"migrate"}
     assert services["rag-worker"]["image"] == services["backend"]["image"]
+    assert "embedding" not in services["rag-worker"]["depends_on"]  # 模型离线不能阻止原文件清理和队列恢复。
     command = services["embedding"]["command"]
     assert command[command.index("--hostname") + 1] == "0.0.0.0"
     assert command[command.index("--max-batch-tokens") + 1] == services["backend"]["environment"]["RAG_EMBEDDING_MAX_BATCH_TOKENS"]

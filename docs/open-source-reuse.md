@@ -1,8 +1,8 @@
 # 开源项目复用说明
 
-## V3 RAG 实际引入（阶段 1—2）
+## V3 RAG 实际引入（阶段 1—3）
 
-只实现项目所需的输入校验、归属过滤和错误分类；推理、分词、向量存储和队列使用现有开源组件。解析器与 RAG 评分将在后续阶段加入。
+推理、分词、解析、切分、向量存储和队列使用现有开源组件；项目补充来源映射、输入限制、状态一致性和归属校验。RAG 评分仍在后续阶段。
 
 | 组件 | 固定版本 | 当前用途 |
 | --- | --- | --- |
@@ -13,6 +13,11 @@
 | [Celery](https://docs.celeryq.dev/en/stable/getting-started/backends-and-brokers/redis.html) | `5.6.3` | JSON 队列和单并发 Worker 配置 |
 | [Hugging Face Hub](https://huggingface.co/docs/huggingface_hub/en/guides/manage-cache) / tokenizers | `1.29.0` / `0.23.1` | 固定 SHA 的只读本地分词缓存与 Token 计数 |
 | [python-multipart](https://pypi.org/project/python-multipart/0.0.32/) | `0.0.32` | 复用 Starlette 流式表单解析；项目仅加鉴权、输入总量限制和文件生命周期管理 |
+| [pypdf](https://github.com/py-pdf/pypdf) | `6.16.2` | 文本 PDF 提取和页码；不做 OCR，拒绝加密和无文本文件 |
+| [python-docx](https://python-docx.readthedocs.io/en/latest/api/document.html) | `1.2.0` | 按正文顺序读取段落、表格与嵌套单元格，不伪造页码 |
+| [semantic-text-splitter](https://github.com/benbrandt/text-splitter) | `0.32.0` | 自然边界和 Markdown 切分；共享真实 Qwen Tokenizer，额外预留 EOS 后再独立复核 |
+
+解析器在 Linux Docker 子进程中受 120 秒、768 MiB 地址空间和提取字符上限约束。依赖无法替代这些资源边界；没有把无法解析的文件或超限内容截断当成功，也没有做完整供应链漏洞扫描。Celery 复用官方 [Bootsteps 生命周期](https://docs.celeryq.dev/en/stable/userguide/extending.html)，只增加每 60 秒扫描 MySQL 的受控恢复线程，不新增独立调度平台。
 
 镜像完整 digest 固定于 `docker-compose.yml`，新增 Python 依赖固定于 `backend/pyproject.toml`。Kombu 5.6.2 的 Redis extra 要求 redis-py `<6.5`，因此不直接采用 redis-py 最新大版本。各阶段实际验证见 `v3-rag-spec-plan.md`。
 

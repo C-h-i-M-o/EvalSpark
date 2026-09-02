@@ -1,5 +1,7 @@
 import math
 from dataclasses import dataclass
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
 from functools import lru_cache
 from typing import Literal
 
@@ -154,6 +156,80 @@ class VectorMatch:
     index_revision: int
     chunk_index: int
     similarity: float
+
+
+class VectorStore:
+    """仅处理服务端确定的文档范围；不接受客户端传入任意过滤器。"""
+
+    def __init__(self, client: AsyncQdrantClient) -> None:
+        self.client = client
+
+    @asynccontextmanager
+    async def _request(self) -> AsyncIterator[None]:
+        try:
+            yield
+        except UnexpectedResponse as error:
+            raise RagClientError("vector_service_rejected", "向量存储服务拒绝本次请求", retryable=error.status_code in (408, 429) or error.status_code >= 500) from None
+        except ResponseHandlingException as error:
+            raise RagClientError("vector_service_unavailable", "向量存储服务暂时不可用", retryable=isinstance(error.source, httpx.RequestError)) from None
+
+    async def ensure_collection(self) -> None:
+        async with self._request():
+            if not await self.client.collection_exists(VECTOR_COLLECTION):
+                try:
+                    await self.client.create_collection(VECTOR_COLLECTION, vectors_config=models.VectorParams(size=VECTOR_DIMENSIONS, distance=models.Distance.COSINE))
+                except UnexpectedResponse as error:
+                    if error.status_code != 409:
+                        raise
+            info = await self.client.get_collection(VECTOR_COLLECTION)
+            params = info.config.params.vectors
+            if not isinstance(params, models.VectorParams) or params.size != VECTOR_DIMENSIONS or params.distance != models.Distance.COSINE:
+                raise RagClientError("vector_collection_mismatch", "现有向量集合规格不匹配，请检查部署；不会覆盖原集合")
+            for name in ("user_id", "knowledge_base_id", "document_id", "index_revision", "chunk_index"):
+                await self.client.create_payload_index(
+                    VECTOR_COLLECTION, name,
+                    field_schema=models.IntegerIndexParams(type="integer", lookup=True, range=False, is_principal=name == "user_id"),
+                    wait=True,
+                )
+
+    def _filter(self, user_id: int, kb_id: int, document_id: int, revision: int | None = None, except_revision: int | None = None) -> models.Filter:
+        if any(type(value) is not int or value <= 0 for value in (user_id, kb_id, document_id)):
+            raise ValueError("向量文档归属无效")
+        fields = {"user_id": user_id, "knowledge_base_id": kb_id, "document_id": document_id}
+        if revision is not None:
+            if revision <= 0:
+                raise ValueError("向量文档版本无效")
+            fields["index_revision"] = revision
+        return models.Filter(
+            must=[models.FieldCondition(key=key, match=models.MatchValue(value=value)) for key, value in fields.items()],
+            must_not=[models.FieldCondition(key="index_revision", match=models.MatchValue(value=except_revision))] if except_revision is not None else None,
+        )
+
+    async def upsert(self, user_id: int, kb_id: int, document_id: int, revision: int, chunks: list[tuple[str, int]], vectors: list[list[float]]) -> None:
+        self._filter(user_id, kb_id, document_id, revision)
+        validated = validate_vectors(vectors, expected_count=len(chunks))
+        points = [models.PointStruct(id=chunk_id, vector=vector, payload={
+            "user_id": user_id, "knowledge_base_id": kb_id, "document_id": document_id, "index_revision": revision, "chunk_index": index,
+        }) for (chunk_id, index), vector in zip(chunks, validated, strict=True)]
+        async with self._request():
+            await self.client.upsert(VECTOR_COLLECTION, points, wait=True, ordering=models.WriteOrdering.STRONG)
+
+    async def count(self, user_id: int, kb_id: int, document_id: int, revision: int | None = None) -> int:
+        async with self._request():
+            if not await self.client.collection_exists(VECTOR_COLLECTION):
+                return 0
+            result = await self.client.count(VECTOR_COLLECTION, count_filter=self._filter(user_id, kb_id, document_id, revision), exact=True)
+            return result.count
+
+    async def delete(self, user_id: int, kb_id: int, document_id: int, *, except_revision: int | None = None) -> None:
+        scope = self._filter(user_id, kb_id, document_id, except_revision=except_revision)
+        async with self._request():
+            if not await self.client.collection_exists(VECTOR_COLLECTION):
+                return
+            await self.client.delete(VECTOR_COLLECTION, points_selector=scope, wait=True, ordering=models.WriteOrdering.STRONG)
+            remaining = await self.client.count(VECTOR_COLLECTION, count_filter=scope, exact=True)
+            if remaining.count:
+                raise RagClientError("vector_cleanup_incomplete", "向量清理尚未完成", retryable=True)
 
 
 class VectorClient:

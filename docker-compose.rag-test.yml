@@ -40,5 +40,91 @@ services:
     command: ["python", "-m", "pytest", "-p", "no:cacheprovider", "tests/test_knowledge_base_service.py", "tests/test_knowledge_base_api.py", "tests/test_rag_migrations.py", "-q"]
     mem_limit: 1g
 
+  qdrant-test:
+    profiles: [lifecycle]
+    image: qdrant/qdrant:v1.19.0@sha256:6c0652f8d6925b22f2f6f0e0a5365a6c9dbc8768bd6e70ccc1cdc14847e452a0
+    environment:
+      QDRANT__TELEMETRY_DISABLED: "true"
+    volumes:
+      - rag_test_vectors:/qdrant/storage
+    mem_limit: 512m
+
+  redis-test:
+    profiles: [lifecycle]
+    image: redis:7.2.16-bookworm@sha256:e17e3a1993da428251cbd88dbdb3de8c8d4007f840d7350eb17a2d8695fa705f
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - rag_test_redis:/data
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  embedding-test:
+    profiles: [lifecycle]
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9@sha256:c26a226262ad4ff3330fb30b76653c1bb65da2fcf413b92284545a010e0a8a48
+    platform: linux/amd64
+    command: ["--model-id", "Qwen/Qwen3-Embedding-0.6B", "--revision", "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3", "--huggingface-hub-cache", "/data", "--port", "80", "--hostname", "0.0.0.0", "--dtype", "float32", "--tokenization-workers", "2", "--max-client-batch-size", "16", "--max-batch-tokens", "2048", "--max-batch-requests", "16", "--auto-truncate", "true", "--max-concurrent-requests", "8", "--disable-spans"]
+    environment:
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      OMP_NUM_THREADS: "4"
+    volumes:
+      - rag_cached_model:/data
+    mem_limit: 4g
+    cpus: 4
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:80/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 5m
+
+  worker-test:
+    profiles: [lifecycle]
+    image: evalspark-backend:dev
+    environment: &lifecycle_environment
+      DATABASE_URL: mysql+aiomysql://multichateval:rag-test-only@mysql-test:3306/multichateval_rag_test
+      APP_ENV: test
+      JWT_SECRET_KEY: rag-test-only-key-with-at-least-32-characters
+      RAG_DOCUMENTS_DIR: /test-documents
+      RAG_EMBEDDING_URL: http://embedding-test:80
+      RAG_QDRANT_URL: http://qdrant-test:6333
+      RAG_REDIS_URL: redis://redis-test:6379/0
+    volumes:
+      - ./backend:/app:ro
+      - rag_cached_model:/data:ro
+      - rag_test_documents:/test-documents
+    command: ["python", "-m", "celery", "-A", "app.worker:celery_app", "worker", "--loglevel=INFO", "--concurrency=1", "--prefetch-multiplier=1", "--queues=rag"]
+    depends_on:
+      mysql-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+      qdrant-test:
+        condition: service_started
+    mem_limit: 1g
+
+  lifecycle-runner:
+    profiles: [lifecycle]
+    extends:
+      service: runner
+    environment:
+      <<: *lifecycle_environment
+      RAG_INTEGRATION_TESTS: "1"
+      RAG_LIFECYCLE_TESTS: "1"
+    volumes:
+      - rag_cached_model:/data:ro
+      - rag_test_documents:/test-documents
+    command: ["python", "-m", "pytest", "-p", "no:cacheprovider", "tests/test_rag_lifecycle.py", "-q"]
+
 volumes:
   rag_test_mysql:
+  rag_test_vectors:
+  rag_test_redis:
+  rag_test_documents:
+  # 仅复用固定模型缓存；测试正文、队列、向量和 MySQL 均为当前测试项目独立卷。
+  rag_cached_model:
+    external: true
+    name: evalspark_rag_model_cache

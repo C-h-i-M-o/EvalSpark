@@ -2,7 +2,7 @@
 
 ## V3 私有知识库管理（阶段 2）
 
-以下接口已接入后端，部署前需要应用 `20260902_01` 迁移。阶段 2 只保存文档和作业，解析、索引与物理删除由阶段 3 实现；当前作业保持 `queued`、`dispatchPending=true`，不能据此声称已经可检索。`taskType=rag` 仍返回 422，React 暂无知识库入口。
+以下接口已接入后端，部署前需要应用 `20260902_01/02` 迁移。阶段 3 已注册异步作业，通知成功后不再固定为 `dispatchPending=true`；是否处理完成必须读取作业状态。四格式解析、索引与物理删除代码已实现，真实 Worker 全链路尚在验收；`taskType=rag` 仍返回 422，React 暂无知识库入口。
 
 所有接口要求登录，只能操作自己的库和文档，管理员也不能读取他人私有内容。未登录 401、账号禁用 403、他人或不存在资源统一 404。领域错误结构为 `{"detail":{"code":"document_limit","message":"每个知识库最多保留 100 份未清理文档"}}`；请求字段错误仍使用 FastAPI 标准 422。分页为 `page=1&pageSize=20`，每页上限 100。
 
@@ -22,7 +22,9 @@
 
 名称去除两端空白后 1—120 字；说明至多 2000 字，可设 null 清空。切块大小为 128—2048 的整数，重叠为非负整数且小于切块大小；不接受布尔值、未知字段或用户传入的 `userId`。PATCH 未传字段保持原值，名称/切分参数不能显式设 null。修改切分参数会使非空库进入 `reindex_required`；有活动任务时拒绝修改。空库不能重建；整库重建期间拒绝新上传/单文档重试，返回 409。
 
-上传仅支持 PDF、DOCX、UTF-8/BOM TXT/Markdown，单文件最多 **20,000,000 字节**，请求总量最多再加 65,536 字节表单开销；不信任 Content-Length 或文件名声明。先鉴权再解析表单，流量超限 413，空文件/非法编码/伪装格式/宏或加密 DOCX 返回 415，多文件、多字段、不完整表单返回 422。每库最多 100 份尚未完成清理的文档，使用数据库行锁保证并发上限。PDF 此阶段仅检查签名，深层解析与扫描件识别尚待阶段 3。
+上传仅支持 PDF、DOCX、UTF-8/BOM TXT/Markdown，单文件最多 **20,000,000 字节**，请求总量最多再加 65,536 字节表单开销；不信任 Content-Length 或文件名声明。先鉴权再解析表单，流量超限 413，空文件/非法编码/伪装格式/宏或加密 DOCX 返回 415，多文件、多字段、不完整表单返回 422。每库最多 100 份尚未完成清理的文档，使用数据库行锁保证并发上限。上传只做轻量校验，Worker 深层解析失败通过文档/作业 `errorCode` 返回，例如 `encrypted_document`、`pdf_no_text`、`invalid_file`、`parse_timeout`、`document_too_complex`，不把异步失败改写成上传 HTTP 请求失败。
+
+作业阶段包括 `parsing/splitting/embedding/indexing/verifying/cleanup_old/deleting_vectors/deleting_file/completed`；进度计数表示当前文档的块处理数，整库操作不能只凭最后一份文档计数判断完成。`status=succeeded` 才是本作业完成；`dispatchPending` 仅表示通知是否待补投。自动重试最多 3 次，不确定写入保留冷却期；人工重试失败清理生成新目标版本/作业，重复活动请求仍复用原作业。删除期间原文下载不可用，物理清理完成才标记 `deleted`；未来历史评测快照不依赖源文件。
 
 库详情字段：`id,name,description,chunkSize,chunkOverlap,status,contentRevision,documentCount,chunkCount,available,errorCode,createdAt,updatedAt`。仅 `ready` 且有块时 `available=true`。文档字段：`id,knowledgeBaseId,originalName,mediaType,sizeBytes,status,indexRevision,chunkCount,errorCode,currentJob,createdAt,updatedAt`，不返回哈希、存储键、用户 ID 或服务器路径。
 
