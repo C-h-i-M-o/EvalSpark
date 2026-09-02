@@ -42,7 +42,7 @@ mysql:3306（仅 Compose 内部网络）
 
 ### V3 RAG 基础设施与异步索引（阶段 1—3）
 
-阶段 1 基础设施与阶段 2 私有知识库管理 API 已完成，阶段 3 已注册文档作业，尚在完整服务验收；未开放 RAG 评测执行入口。`app/services/rag/clients.py` 通过 HTTP 调用内网 TEI，使用官方 Qdrant SDK 存取与查询；`app/worker.py` 注册 Celery 作业和启动/每 60 秒的数据库恢复入口。
+阶段 1—3 基础设施、私有知识库管理和文档作业代码已交付；受开发设备内存限制，用户允许将真实模型完整联调和部署延期。阶段 4 已实现内部逐模型链路，尚未开放 RAG 评测执行入口。`app/services/rag/clients.py` 通过 HTTP 调用内网 TEI，使用官方 Qdrant SDK 存取与查询；`app/worker.py` 注册 Celery 作业和启动/每 60 秒的数据库恢复入口。
 
 知识库路由复用 Cookie/RBAC 登录态，库和文档授权始终按当前用户过滤，管理员没有私有内容豁免。`knowledge_base_service.py` 管理库/文档版本、状态、行锁配额和作业事务；`rag/documents.py` 负责鉴权后的 multipart 限流、轻量格式检查和随机键文件存储。控制器不返回物理存储路径，下载仅为私有附件。
 
@@ -55,11 +55,19 @@ Worker 不等待 Embedding 健康，模型离线也能恢复和清理。Celery �
 - TEI CPU 加载固定 revision 的 Qwen3-Embedding-0.6B，输出 1024 维向量；查询带检索指令，文档不带指令。
 - TEI 独占模型缓存写权限。后端/Worker 使用同卷的只读 `tokenizer.json`，只按固定 revision 本地加载，不联网回退、不加载模型权重。
 - 客户端预检完整输入，按条数和 Token 总量分批，默认 16 条/2048 Token/60 秒；与 TEI 共用批量 Token 配置，所有 `/embed` 请求显式 `truncate=false`，不静默截断，拒绝错误维度、非有限数值或零向量。
-- Qdrant 查询固定集合 `rag_chunks_v1`，必须同时限定用户、知识库、文档与其版本配对；返回元数据再次校验归属，防止读取错误版本原文。集合创建和写入后续实现。
-- Redis 使用 AOF 和 `noeviction`；Worker 单并发、预取 1、JSON 消息、延迟确认、硬时限 3 小时与 4 小时可见性超时。持久作业、幂等、租约与恢复将在索引阶段实现，不能仅靠队列配置保证只执行一次。
-- 新增服务均只走 Compose 网络，普通后端健康检查不探测 TEI/Qdrant/Redis。Worker 等待 TEI/Redis 健康及 Qdrant 启动；Qdrant 连接错误由客户端处理。
+- Qdrant 查询固定集合 `rag_chunks_v1`，必须同时限定用户、知识库、文档与其版本配对；返回元数据再次校验归属，防止读取错误版本原文。集合创建、payload 索引、幂等写入和范围清理由阶段 3 实现。
+- Redis 使用 AOF 和 `noeviction`；Worker 单并发、预取 1、JSON 消息、延迟确认、硬时限 3 小时与 4 小时可见性超时。持久作业、幂等、租约与恢复已实现，不能仅靠队列配置保证只执行一次。
+- 新增服务均只走 Compose 网络，普通后端健康检查不探测 TEI/Qdrant/Redis。Worker 等待 Redis 健康及 Qdrant 启动，不等待 TEI；Qdrant 连接错误由客户端处理。
 
 文件、向量与消息分别使用 `rag_documents`、`qdrant_data`、`rag_redis_data` 命名卷；原 MySQL 和前端卷保持不变。完整设计和阶段证据见 `v3-rag-spec-plan.md`。
+
+### V3 内部逐模型链路（阶段 4）
+
+`rag/evaluation_store.py` 在私有库行锁内创建任务、候选回答和资料版本快照。`rag/evaluation.py` 并发执行每个候选的一次查询改写、私有 Embedding、带归属过滤的 Top-5 检索，并从 MySQL 校验和读取原文。各操作使用独立短会话，不跨模型/网络调用持 SQL 锁。
+
+全部候选检索结束后再次锁库核对内容版本及已发布文档清单，再同时固定各自证据。版本变化使本次尚未固定证据失败，不能自动使用新库。流式生成只用已固定的当前回答证据；删除当前文件或块不影响该快照。固定系统消息与 JSON 数据消息分离，旧 chat 仍保留原请求形状。
+
+调用前持久化阶段占位，返回后保存类型化用量，失败/取消保留已知部分，未返回明确为未知。`rag/usage.py` 复用费用算法并分币种汇总；终态事务一次写 Token 日志。中断收尾不重放外部调用。评分/API 取消和进程恢复接点在阶段 5 接通，当前不能作为已可用的对外 RAG 评测。
 
 ### 当前普通评测流程
 

@@ -49,6 +49,8 @@ class OpenAICompatibleClient(ModelClient):
         }
         payload.update(self.extra_body)
         payload.update(request.extra_body)
+        if request.system_prompt:
+            payload["messages"] = self._rag_messages(request)
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -67,7 +69,8 @@ class OpenAICompatibleClient(ModelClient):
             answer_fallback=len(answer),
         )
         latency_ms = int((perf_counter() - started_at) * 1000)
-        return ModelReply(answer=answer, usage=usage, latency_ms=latency_ms)
+        return ModelReply(answer=answer, usage=usage, latency_ms=latency_ms,
+                          usage_known=self._usage_known(data.get("usage")))
 
     async def stream_chat(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
         if not self.api_key:
@@ -85,6 +88,8 @@ class OpenAICompatibleClient(ModelClient):
         }
         payload.update(self.extra_body)
         payload.update(request.extra_body)
+        if request.system_prompt:
+            payload["messages"] = self._rag_messages(request)
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         answer_parts: list[str] = []
         reasoning_parts: list[str] = []
@@ -152,7 +157,21 @@ class OpenAICompatibleClient(ModelClient):
             answer_fallback=len(answer),
         )
         latency_ms = int((perf_counter() - started_at) * 1000)
-        yield ModelStreamEvent(delta="", reply=ModelReply(answer=answer, usage=usage, latency_ms=latency_ms))
+        yield ModelStreamEvent(delta="", reply=ModelReply(answer=answer, usage=usage, latency_ms=latency_ms,
+                                                         usage_known=self._usage_known(usage_data)))
+
+    @staticmethod
+    def _rag_messages(request: ModelRequest) -> list[dict[str, str]]:
+        # 数据消息不能通过供应商 extra_body 覆盖系统边界。
+        return [{"role": "system", "content": request.system_prompt}, {"role": "user", "content": request.prompt}]
+
+    @staticmethod
+    def _usage_known(value: object) -> bool:
+        if not isinstance(value, dict):
+            return False
+        prompt = value.get("prompt_tokens", value.get("input_tokens"))
+        output = value.get("completion_tokens", value.get("output_tokens"))
+        return type(prompt) is int and prompt >= 0 and type(output) is int and output >= 0
 
     def get_model_name(self) -> str:
         return self.model_name

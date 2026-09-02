@@ -23,13 +23,23 @@
 
 `rag_jobs.attempt` 每次领取递增，不给旧执行器复用；running 的 `lease_until` 是租约期限，queued/failed 上的未来时间是重试/在途写入冷却期限。同库领取检查当前运行作业和冷却窗口；失败清理保持 deleting，不声称物理删除。过期恢复扫描、版本检查、发布和最终清理由 `rag/jobs.py` 与 `rag/indexing.py` 执行。只有已确认删除向量、原文件和块后才标记 deleted；知识库和文档墓碑、作业记录保留，历史证据独立存储约束不变。
 
-真实服务测试采用独立 Compose 项目 `evalspark-rag-lifecycle-test` 和 `lifecycle` profile：MySQL/原文/向量/Redis 卷全部独立，仅复用固定模型缓存；不要对默认业务项目运行测试。完整模型链路仍在验收，见合并规格计划的阶段 3 记录。
+真实服务测试采用独立 Compose 项目 `evalspark-rag-lifecycle-test` 和 `lifecycle` profile：MySQL/原文/向量/Redis 卷全部独立，仅复用固定模型缓存；不要对默认业务项目运行测试。按用户资源受限决定，完整模型链路延期到条件充足设备，见合并规格计划的阶段 3 记录。
 
 文档先保存受控文件，再在知识库行锁内检查 100 份上限、插入元数据/作业并提交。提交失败只清理本次未引用文件；事务提交后通知 broker，通知失败保持 `queued`，由后续 Worker 恢复补投。重试/重建/删除提升对应版本，旧作业不能发布为新版本。删除先写墓碑，物理文件/块/向量清理由阶段 3 实现，不把请求成功等同物理删除成功。
 
 业务升级前必须另行确认：实际父版本、备份位置与校验、DDL 元数据锁影响、恢复窗口和权限。新增 `task_type` 后 ORM 依赖该列，不能跳过迁移直接启动新后端。迁移不提供自动破坏性 downgrade；恢复使用经批准的备份流程。默认完整 Compose 会执行 `migrate`，未批准业务升级时只使用独立测试 Compose。
 
 隔离测试：`docker compose --env-file .env.example -f docker-compose.rag-test.yml up -d mysql-test`，随后 `docker compose --env-file .env.example -f docker-compose.rag-test.yml run --rm runner`。测试服务无宿主机端口、无业务网络/卷、无业务 `.env` 挂载；运行前强制校验开关、主机 `mysql-test` 和数据库名。每轮使用唯一测试用户并保留测试库，不清空任何表或数据卷。
+
+## V3 阶段 4 快照与用量
+
+本阶段不新增 DDL，使用已有 `rag_response_details`。开始时固定知识库 ID/名称、内容修订号、已发布文档版本、切分配置和 Embedding revision，提前创建候选回答。证据屏障后二次版本检查通过，分别保存 `rewritten_query` 和最多 5 条证据 JSON；失败阶段及错误码同事务保存。后续删除源资料不修改历史快照。
+
+`stage_usage_json` 按 `(stage,runIndex)` 唯一，stage 为 rewrite/embed/generate/judge；模型快照仅包含展示名、模型名、参数、单价和币种，不存凭据/地址/备注。status 为 pending/known/unknown；未知 Token 和费用为 null，汇总返回已知外部 Token 小计与 `hasUnknownUsage`，费用分币种保存。回答顶层用量/费用仍只代表生成阶段。
+
+阶段占位与更新先锁 `model_responses`，随后 current read 锁读明细，避免 REPEATABLE READ 旧快照覆盖最新阶段状态。终态与 `record_rag_usage` 同事务，锁下检查唯一 `token_usage_logs.response_id`，复用原每日累加路径；重复提交不二次累计。已确认中断的任务仅将 pending 置 unknown、保留片段和已知用量并结束，不自动重试模型。阶段 5 负责接入终态评分、API 与运行中断收尾。
+
+SQLite 轻量测试覆盖 SQL 往返与回滚，但不能证明 MySQL 并发锁行为；`test_rag_usage_mysql.py` 保留显式隔离库开关用例，本机延期执行。业务库迁移门禁不变。
 
 ## 初始化与迁移基线
 

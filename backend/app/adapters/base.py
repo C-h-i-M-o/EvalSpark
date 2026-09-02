@@ -10,6 +10,7 @@ class ModelRequest:
     max_tokens: int = 1024
     temperature: float = 0.7
     extra_body: dict[str, object] = field(default_factory=dict)
+    system_prompt: str = ""
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,8 @@ class ModelReply:
     answer: str
     usage: ModelUsage
     latency_ms: int
+    # 兼容旧适配器；明确缺少上游用量时由适配器设为 False。
+    usage_known: bool = True
 
 
 @dataclass(frozen=True)

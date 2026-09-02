@@ -7,9 +7,13 @@ from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.evaluation import EvaluationTask
+from app.models.rag import RagResponseDetail
+from app.models.response import ModelResponse
 from app.models.token_usage import DailyUserTokenUsage, TokenUsageLog, UserTokenQuota
 from app.models.user import User
 from app.schemas.token_usage import AdminUserListRead, AdminUserUsageRead, TokenUsageRead
+from app.schemas.rag import RagStageUsage
+from app.services.rag.usage import summarize_usage
 
 DEFAULT_DAILY_TOKEN_LIMIT = 100_000
 SHANGHAI_TIMEZONE = ZoneInfo("Asia/Shanghai")
@@ -86,6 +90,33 @@ class TokenQuotaService:
             total_tokens=DailyUserTokenUsage.total_tokens + normalized_tokens
         )
         await db.execute(statement)
+
+    async def record_rag_usage(self, db: AsyncSession, *, response_id: int, user_id: int) -> bool:
+        """调用者在评分终态事务内调用；回答锁与唯一日志共同防止重复累计。"""
+        response = await db.scalar(select(ModelResponse).join(EvaluationTask).where(
+            ModelResponse.id == response_id, EvaluationTask.user_id == user_id,
+            EvaluationTask.task_type == "rag", EvaluationTask.visibility == "private",
+        ).with_for_update().execution_options(populate_existing=True))
+        if response is None or response.status not in ("success", "failed"):
+            raise ValueError("RAG 回答尚未结束或无权访问，不能汇总入账")
+        # 调用方可能已建立 REPEATABLE READ 快照；锁后检查也必须读取当前提交值。
+        existing = await db.scalar(select(TokenUsageLog.id).where(TokenUsageLog.response_id == response_id).with_for_update())
+        if existing is not None:
+            return False
+        detail = await db.scalar(select(RagResponseDetail).where(RagResponseDetail.response_id == response_id)
+                                 .with_for_update().execution_options(populate_existing=True))
+        if detail is None:
+            raise ValueError("RAG 回答缺少阶段用量明细")
+        stages = [RagStageUsage.model_validate(item) for item in detail.stage_usage_json]
+        for stage in stages:
+            if stage.status == "pending":
+                stage.status = "unknown"
+        detail.stage_usage_json = [stage.model_dump(mode="json", by_alias=True) for stage in stages]
+        summary = summarize_usage(stages)
+        await self.record_usage(db, user_id=user_id, task_id=response.task_id, response_id=response_id,
+            model_config_id=response.model_config_id, total_tokens=summary.external_total_tokens)
+        await db.flush()
+        return True
 
     async def list_users(
         self,

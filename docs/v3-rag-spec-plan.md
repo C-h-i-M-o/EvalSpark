@@ -366,7 +366,7 @@ Final = 0.90 × BaseFinal + 0.10 × FeedbackScore          # 有反馈
 | 1 | Docker 依赖、类型化客户端与分词缓存接入 | `build(rag): 增加私有检索基础设施与客户端` | 代码和验收完成 |
 | 2 | 私有知识库与文档管理、增量模型迁移 | `feat(rag): 新增私有知识库与文档管理` | 已完成并验证（仅隔离库迁移，未业务部署） |
 | 3 | 可恢复的异步解析、切分、索引和清理 | `feat(rag): 实现异步索引与可恢复生命周期` | 代码交付；四格式真实模型全链路延期 |
-| 4 | 逐模型检索回答内核、快照和用量 | `feat(rag): 实现逐模型检索回答与证据快照` | 未开始 |
+| 4 | 逐模型检索回答内核、快照和用量 | `feat(rag): 实现逐模型检索回答与证据快照` | 代码交付、轻量回归通过；真实数据库并发和模型联调延期 |
 | 5 | 三轮评分、正式 API 接通、历史与反馈一致性 | `feat(rag): 接入忠实度引用评审与评分持久化` | 未开始 |
 | 6 | React 知识库、RAG 工作台和历史详情 | `feat(rag): 完成知识库与 RAG 评测界面` | 未开始 |
 | 7 | Docker 集成、恢复/权限验证及交付记录 | `test(rag): 完成 Docker 集成验收与交付文档` | 未开始 |
@@ -528,19 +528,35 @@ assert sum(chunk.token_count for chunk in chunks) >= original_token_count
 
 ### 阶段 4：逐模型链路、快照与用量
 
-**文件：** 新增 `backend/app/services/rag/evaluation.py`、`backend/tests/test_rag_evaluation.py`、`test_rag_usage.py`；扩展 RAG schema/model 与 `evaluation_service.py` 的内部持久化接点。必要时在 `token_quota_service.py` 增加受回答锁保护的 RAG 汇总入账入口，不改变普通计费路径。更新架构、数据库和本文。
+实施细化：复用现有 OpenAI-compatible 适配器，为 `ModelRequest` 增加默认空的 `system_prompt`，仅 RAG 请求使用固定系统角色和 JSON 数据消息，旧 chat 请求不变。模型回复增加用量是否由上游明确提供的标记，缺失用量保存为未知，不把适配器的兼容回退数字当成精确账单。配置快照使用白名单，不保存 API Key、地址、备注或任意 extra_body。
 
-**接口：** `rewrite_query(client: ModelClient, request: ModelRequest) -> ModelReply`；`retrieve_evidence(db: AsyncSession, user_id: int, knowledge_base_id: int, versions: list[tuple[int, int]], query: str) -> list[RagEvidence]`，均为异步方法。
+为避免并发候选共享同一 AsyncSession，RAG 持久化放入专用 `rag/evaluation_store.py`，每次操作独立短事务；仅在创建及证据屏障内锁知识库，不跨外部调用持锁。`RagEvaluationRunner` 提供 `prepare_rag_snapshots` 与 `stream_rag_answers`，替代本节的独立函数草案，便于注入现有客户端做轻量验证。内部 `rag_answer_ready` 事件只通知阶段 5 接管评分，不作为对外已评分结果发送。
+
+阶段用量以 `(stage, runIndex)` 唯一，每次外部调用前持久化 pending，收到回复立即保存 known 或 unknown；同一阶段不得重复调用。中断后只将 pending 改为 unknown 并结束记录，不能自动重试可能已计费的调用。汇总保留已知 Token 小计与 `hasUnknownUsage`，未知部分不伪造为零，Embedding 不进入外部账单。阶段 5 终态事务使用回答行锁和唯一日志防止重复入账。真实数据库并发、真实模型和完整流式断线联调按资源受限约定延期，保留可运行测试。
+
+**文件：** 新增 `backend/app/services/rag/evaluation.py`、`evaluation_store.py`、`usage.py` 及对应测试；扩展 RAG schema、模型适配器请求/回复和 `token_quota_service.py` 的受回答锁汇总入账入口，不改变普通计费路径。正式接入 `evaluation_service.py` 留在阶段 5，避免提前开放无评分结果。更新架构、数据库和本文。
+
+**接口：** `RagEvaluationStore.create(...) -> tuple[RagTaskContext, list[PreparedRagResponse]]`；`RagEvaluationRunner.prepare_rag_snapshots(...) -> None`；`RagEvaluationRunner.stream_rag_answers(...) -> AsyncIterator[RagStreamEvent]`。存储接口使用独立短会话，Runner 可注入现有模型、Embedding 和向量客户端。
 
 `RagTaskContext` 在 RAG schema 中定义，字段为 `task_id: int, user_id: int, knowledge_base_id: int, content_revision: int, document_versions: list[tuple[int, int]], prompt: str, enable_thinking: bool`。`PreparedRagResponse` 保存 `response_id: int, model_config_id: int, rewritten_query: str | None, evidence: list[RagEvidence], failure_stage: str | None, error_code: str | None`；failure_stage 使用第 6.1 节 Literal 集合。
 
-`prepare_rag_snapshots(db: AsyncSession, context: RagTaskContext, models: list[RuntimeModelConfig]) -> list[PreparedRagResponse]` 为异步方法，保存证据屏障及失败候选结果；`stream_rag_answers(context: RagTaskContext, prepared: list[PreparedRagResponse], models: list[RuntimeModelConfig]) -> AsyncIterator[RagStreamEvent]` 为异步生成器。`RagStreamEvent` 在 `schemas/rag.py` 定义为第 5.3 节阶段/检索事件与既有模型 delta、answer_completed、response 事件的判别联合，JSON 字段与现有 NDJSON 保持一致。
+`prepare_rag_snapshots` 保存证据屏障及失败候选结果；`stream_rag_answers` 为异步生成器。`RagStreamEvent` 在 `schemas/rag.py` 定义为阶段/检索事件、既有模型 delta/answer_completed 形状和内部 answer_ready 的判别联合。阶段 5 对外分派时才把评分持久化后的结果转换为 `model_response`，JSON 字段与现有 NDJSON 保持一致。
 
-- [ ] 用两个假候选分别返回不同查询，验证仅各自的一条查询进入 TEI，两份证据不串用；所有过滤均带当前用户、库和版本清单。
-- [ ] 运行红色测试；实现改写、Top-5、版本复核屏障、快照和生成。零命中、改写失败不调用后续生成；其他候选继续。
-- [ ] 测试检索中删库/重建导致快照拒绝，以及快照完成后删库不影响读取；测试文档中的“忽略指令”始终作为资料输入而非系统指令。
-- [ ] 保存各调用用量与配置快照；异常分支保留已知用量，按币种汇总，回答终态重复持久化不能二次增加每日配额。
-- [ ] 单元测试验证每候选一次改写、一次生成，断流能保留可恢复状态；不开放未完成评分的公共 RAG 执行路径。更新文档、审查并提交。
+- [x] 用两个假候选分别返回不同查询，验证仅各自的一条查询进入 TEI，两份证据不串用；所有过滤均带当前用户、库和版本清单。
+- [x] 运行红色测试；实现改写、Top-5、版本复核屏障、快照和生成。零命中、改写失败不调用后续生成；其他候选继续。
+- [x] 测试检索中删库/重建导致快照拒绝，以及快照完成后删库不影响读取；测试文档中的“忽略指令”始终作为资料输入而非系统指令。
+- [x] 保存各调用用量与配置快照；异常分支保留已知用量，按币种汇总，回答终态重复持久化不能二次增加每日配额。MySQL 并发用例按资源约定延期执行，未标记为通过。
+- [x] 单元测试验证每候选一次改写、一次生成，断流能保留可恢复状态；不开放未完成评分的公共 RAG 执行路径。更新文档、审查并提交。
+
+阶段 4 实施记录（2026-09-02）：
+
+- 阶段 3 已按资源受限约定提交为 `db1ec08`。阶段 4 新增 `RagEvaluationRunner`、`RagEvaluationStore` 和用量函数，未改变普通评测的分派，也未开放 RAG 请求。
+- 外部调用前创建私有任务/回答/明细，逐候选只改写一条查询并独立 Top-5；MySQL 二次验证块归属/文档版本/块序号。全部候选到达屏障后复核库版本并固定独立证据，随后生成。快照固定后删除当前块不影响已保存证据。
+- 增加有类型的阶段事件和内部 `rag_answer_ready`；后续阶段 5 在评分持久化完成后才转成公开 `model_response`。数据消息使用 JSON，固定系统消息不含文档原文，未把提示词边界描述成绝对防注入。
+- 各阶段 JSON 使用白名单模型快照和 known/pending/unknown 用量，复用既有费用算法，按币种汇总，Embedding 不计入外部 Token。`record_rag_usage` 在终态事务内锁回答、当前读检查唯一日志后一次累计；原 `record_usage` 路径不变。
+- `interrupt` 只在调用方确认任务停止后执行，保留已存回答/用量，将未返回阶段设为 unknown，生成排除统计的失败结果并一次入账；它不是自动模型重试。API 的取消和进程恢复接点在阶段 5 接通，不能用于终止仍存活的其他任务。
+- 新增 SQLite 真实 SQL 往返用于快照、归属、回滚和中断验证，测试包装只在测试文件内；不以它代替 MySQL 行锁。独立 MySQL 用例已编写并显式开关跳过，覆盖并发阶段占位、旧 REPEATABLE READ 快照后的 current read、并发终态单次累加。当前未启动测试数据库。
+- 断流填满队列用例曾复现关闭等待，定位到向无人消费的满队列发送结束通知，修复后针对性测试通过。提交前 RAG/适配器/普通评测、反馈和 Token 定向回归为 **99 passed、1 skipped、36 warnings**；跳过项是显式隔离 MySQL 用例，警告为既有 TestClient 与 SQLite 建表的 UTC 默认值。真实 TEI、真实模型调用、完整部署和 MySQL 并发留待资源充足设备验证。
 
 明确的调用计数断言：
 

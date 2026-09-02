@@ -89,6 +89,11 @@ class EmbeddingClient:
         self.http_client = http_client
         self.tokenizer = tokenizer
 
+    def input_token_count(self, text: str, kind: Literal["query", "document"]) -> int:
+        tokenizer = self.tokenizer if self.tokenizer is not None else load_tokenizer(self.config)
+        content = f"Instruct: {QUERY_INSTRUCTION}\nQuery: {text}" if kind == "query" else text
+        return len(tokenizer.encode(content, add_special_tokens=True).ids)
+
     async def embed(self, texts: list[str], kind: Literal["query", "document"]) -> list[list[float]]:
         if not texts or any(not text.strip() for text in texts):
             raise ValueError("Embedding 输入必须是非空文本列表")
