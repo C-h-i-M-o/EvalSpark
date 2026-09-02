@@ -114,7 +114,8 @@ def test_development_dockerfiles_pin_runtime_lines_and_locked_installs() -> None
     frontend = frontend_path.read_text(encoding="utf-8")
     assert "FROM python:3.12-slim" in backend
     assert "PIP_ROOT_USER_ACTION=ignore" in backend
-    assert 'python -m pip install --no-cache-dir -e ".[dev]"' in backend
+    assert '--mount=type=cache,target=/root/.cache/pip' in backend
+    assert 'python -m pip install --timeout 120 -e ".[dev]"' in backend
     assert "FROM node:22-bookworm-slim" in frontend
     assert "corepack prepare pnpm@10.15.1 --activate" in frontend
     assert "pnpm install --frozen-lockfile" in frontend

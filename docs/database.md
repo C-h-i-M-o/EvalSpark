@@ -1,5 +1,26 @@
 # 数据库设计
 
+## V3 阶段 2 增量迁移
+
+新增迁移 `20260902_01`，唯一父版本为 `20260705_03`。本阶段只在独立 `multichateval_rag_test` 验证，尚未应用到业务库。新外键使用 BIGINT，与既有 MySQL 主键对齐；不修改旧初始化 SQL 或历史迁移。
+
+| 表/字段 | 作用及约束 |
+| --- | --- |
+| `evaluation_tasks.task_type` | 非空 VARCHAR(16)，默认 `chat`；保留旧问题、回答、归属、可见性和原始得分。阶段 2 不接受 `rag` 创建请求 |
+| `knowledge_bases` | 用户归属、名称/说明、切分配置、状态、内容版本、安全错误码和时间；用户/状态索引 |
+| `knowledge_documents` | 库/用户外键、展示原名、唯一随机存储键、类型、字节数、SHA-256、状态、索引版本、块数及时间；库/状态索引 |
+| `knowledge_chunks` | UUID 块 ID、文档/库/用户外键、索引版本、块序号、原文、Token 数和 `source_json`；文档/版本/块序号唯一；归属版本索引 |
+| `rag_jobs` | 确定性 UUID、库/可空文档外键、操作与目标版本、状态/进度、尝试次数、租约 `lease_until`、通知时间 `dispatched_at`、安全错误码和时间 |
+| `rag_response_details` | 以回答外键为主键；知识库、文档版本、改写、证据、阶段用量、Judge 轮次独立快照；RAG 分项、基础分用 DECIMAL(18,10)，错误/公式版本独立保存 |
+
+块来源支持文本行区间、PDF 页区间、DOCX 段落/表格逻辑块区间，均从 1 开始。Qdrant 和 MySQL 将共用块 UUID；此阶段尚未写块或向量。`rag_response_details` 不以外键关联知识库/文档，后续删除源资料不能级联抹去历史证据。
+
+文档先保存受控文件，再在知识库行锁内检查 100 份上限、插入元数据/作业并提交。提交失败只清理本次未引用文件；事务提交后通知 broker，通知失败保持 `queued`，由后续 Worker 恢复补投。重试/重建/删除提升对应版本，旧作业不能发布为新版本。删除先写墓碑，物理文件/块/向量清理由阶段 3 实现，不把请求成功等同物理删除成功。
+
+业务升级前必须另行确认：实际父版本、备份位置与校验、DDL 元数据锁影响、恢复窗口和权限。新增 `task_type` 后 ORM 依赖该列，不能跳过迁移直接启动新后端。迁移不提供自动破坏性 downgrade；恢复使用经批准的备份流程。默认完整 Compose 会执行 `migrate`，未批准业务升级时只使用独立测试 Compose。
+
+隔离测试：`docker compose --env-file .env.example -f docker-compose.rag-test.yml up -d mysql-test`，随后 `docker compose --env-file .env.example -f docker-compose.rag-test.yml run --rm runner`。测试服务无宿主机端口、无业务网络/卷、无业务 `.env` 挂载；运行前强制校验开关、主机 `mysql-test` 和数据库名。每轮使用唯一测试用户并保留测试库，不清空任何表或数据卷。
+
 ## 初始化与迁移基线
 
 Docker 首次创建 `mysql_data` 时，`docker/mysql/init/001_schema.sql` 会创建截至 Alembic `20260612_01` 的基础结构，并在 `alembic_version` 中写入该版本。随后 `migrate` 服务执行 `alembic upgrade head`，只应用基线之后的迁移；已有数据卷不会重复执行初始化 SQL，但每次启动仍会检查并升级到最新版本。

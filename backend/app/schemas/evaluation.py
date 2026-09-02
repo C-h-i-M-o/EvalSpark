@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class EvaluationTaskCreate(BaseModel):
+    task_type: Literal["chat"] = Field(default="chat", alias="taskType")
     conversation_id: int | None = Field(default=None, alias="conversationId")
     prompt: str
     model_ids: list[int] = Field(default_factory=list, alias="modelIds")

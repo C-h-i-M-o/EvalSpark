@@ -1,0 +1,44 @@
+name: evalspark-rag-test
+
+# 独立测试项目：不读取业务 env_file、不复用业务网络或数据卷。
+services:
+  mysql-test:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: rag-test-root-only
+      MYSQL_DATABASE: multichateval_rag_test
+      MYSQL_USER: multichateval
+      MYSQL_PASSWORD: rag-test-only
+    volumes:
+      - rag_test_mysql:/var/lib/mysql
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  runner:
+    image: evalspark-backend:dev
+    environment:
+      DATABASE_URL: mysql+aiomysql://multichateval:rag-test-only@mysql-test:3306/multichateval_rag_test
+      RAG_INTEGRATION_TESTS: "1"
+      APP_ENV: test
+      JWT_SECRET_KEY: rag-test-only-key-with-at-least-32-characters
+      RAG_DOCUMENTS_DIR: /tmp/rag-documents
+    volumes:
+      - ./backend:/workspace/backend:ro
+      - ./frontend:/workspace/frontend:ro
+      - ./scripts:/workspace/scripts:ro
+      - ./.env.example:/workspace/.env.example:ro
+      - ./docker-compose.yml:/workspace/docker-compose.yml:ro
+      - ./docker/mysql/init/001_schema.sql:/workspace/docker/mysql/init/001_schema.sql:ro
+    working_dir: /workspace/backend
+    depends_on:
+      mysql-test:
+        condition: service_healthy
+    command: ["python", "-m", "pytest", "-p", "no:cacheprovider", "tests/test_knowledge_base_service.py", "tests/test_knowledge_base_api.py", "tests/test_rag_migrations.py", "-q"]
+    mem_limit: 1g
+
+volumes:
+  rag_test_mysql:

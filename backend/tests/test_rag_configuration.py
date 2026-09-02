@@ -6,7 +6,11 @@ from pydantic import ValidationError
 from app.core.config import Settings
 
 
-def test_rag_defaults_use_internal_services_and_shared_read_only_cache() -> None:
+def test_rag_defaults_use_internal_services_and_shared_read_only_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 默认值测试不应被测试容器的显式 RAG 配置覆盖。
+    for name in Settings.model_fields:
+        if name.startswith("rag_"):
+            monkeypatch.delenv(name.upper(), raising=False)
     settings = Settings(_env_file=None)
     values = settings.model_dump()
 

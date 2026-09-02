@@ -1,9 +1,10 @@
 from fastapi import APIRouter
 
-from app.api.v1 import admin_users, auth, evaluation, feedback_stats, health, model_configs, models, scoring, token_usage
+from app.api.v1 import admin_users, auth, evaluation, feedback_stats, health, knowledge_bases, model_configs, models, scoring, token_usage
 
 api_router = APIRouter()
 api_router.include_router(health.router, tags=["health"])
+api_router.include_router(knowledge_bases.router, prefix="/knowledge-bases", tags=["knowledge-bases"])
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 api_router.include_router(evaluation.router, prefix="/evaluation", tags=["evaluation"])
 api_router.include_router(models.router, prefix="/models", tags=["models"])

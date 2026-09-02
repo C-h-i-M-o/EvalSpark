@@ -1,5 +1,33 @@
 # API 说明
 
+## V3 私有知识库管理（阶段 2）
+
+以下接口已接入后端，部署前需要应用 `20260902_01` 迁移。阶段 2 只保存文档和作业，解析、索引与物理删除由阶段 3 实现；当前作业保持 `queued`、`dispatchPending=true`，不能据此声称已经可检索。`taskType=rag` 仍返回 422，React 暂无知识库入口。
+
+所有接口要求登录，只能操作自己的库和文档，管理员也不能读取他人私有内容。未登录 401、账号禁用 403、他人或不存在资源统一 404。领域错误结构为 `{"detail":{"code":"document_limit","message":"每个知识库最多保留 100 份未清理文档"}}`；请求字段错误仍使用 FastAPI 标准 422。分页为 `page=1&pageSize=20`，每页上限 100。
+
+| 方法及路径 | 请求/响应 |
+| --- | --- |
+| `POST /api/knowledge-bases` | JSON：`name`、可选 `description`、`chunkSize=800`、`chunkOverlap=120`；201 库详情 |
+| `GET /api/knowledge-bases` | 分页自己的库：`items,total,page,pageSize` |
+| `GET /api/knowledge-bases/{id}` | 库详情 |
+| `PATCH /api/knowledge-bases/{id}` | 部分更新上述字段；200 库详情 |
+| `DELETE /api/knowledge-bases/{id}` | 202 删除作业；立即停止修改和下载 |
+| `POST /api/knowledge-bases/{id}/reindex` | 202 整库重建作业 |
+| `GET /api/knowledge-bases/{id}/documents` | 分页文档及当前作业进度 |
+| `POST /api/knowledge-bases/{id}/documents` | multipart 仅一个 `file`；202 文档索引作业 |
+| `POST /api/knowledge-bases/{id}/documents/{docId}/retry` | 202 失败文档重试作业；相同活动作业幂等复用 |
+| `DELETE /api/knowledge-bases/{id}/documents/{docId}` | 202 删除作业；立即阻止下载，文件清理异步进行 |
+| `GET /api/knowledge-bases/{id}/documents/{docId}/download` | 原文件附件；`nosniff`、`private, no-store`，不公开物理路径 |
+
+名称去除两端空白后 1—120 字；说明至多 2000 字，可设 null 清空。切块大小为 128—2048 的整数，重叠为非负整数且小于切块大小；不接受布尔值、未知字段或用户传入的 `userId`。PATCH 未传字段保持原值，名称/切分参数不能显式设 null。修改切分参数会使非空库进入 `reindex_required`；有活动任务时拒绝修改。空库不能重建；整库重建期间拒绝新上传/单文档重试，返回 409。
+
+上传仅支持 PDF、DOCX、UTF-8/BOM TXT/Markdown，单文件最多 **20,000,000 字节**，请求总量最多再加 65,536 字节表单开销；不信任 Content-Length 或文件名声明。先鉴权再解析表单，流量超限 413，空文件/非法编码/伪装格式/宏或加密 DOCX 返回 415，多文件、多字段、不完整表单返回 422。每库最多 100 份尚未完成清理的文档，使用数据库行锁保证并发上限。PDF 此阶段仅检查签名，深层解析与扫描件识别尚待阶段 3。
+
+库详情字段：`id,name,description,chunkSize,chunkOverlap,status,contentRevision,documentCount,chunkCount,available,errorCode,createdAt,updatedAt`。仅 `ready` 且有块时 `available=true`。文档字段：`id,knowledgeBaseId,originalName,mediaType,sizeBytes,status,indexRevision,chunkCount,errorCode,currentJob,createdAt,updatedAt`，不返回哈希、存储键、用户 ID 或服务器路径。
+
+202 响应示例：`{"documentId":12,"jobId":"UUID","status":"queued","dispatchPending":true}`。整库作业的 `documentId=null`。`currentJob` 包含作业 ID、库/文档 ID、操作、目标版本、状态、阶段、已处理/总块数、尝试次数、安全错误码和时间。队列通知发生在事务提交后；通知失败保留文件和作业等待补投，不将已提交文档误删。删除中的资源保留墓碑与版本；重复请求返回相同删除作业。
+
 ## 认证约定
 
 除健康检查、注册和登录外，业务接口均要求浏览器携带后端签发的 HttpOnly Cookie。未登录返回 `401`，普通用户访问管理员接口返回 `403`。

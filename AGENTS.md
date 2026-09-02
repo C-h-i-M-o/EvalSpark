@@ -16,7 +16,7 @@ MultiChatEval 是一个“面向多模型问答的对话质量评估系统”。
 
 ## 当前技术栈
 
-- V3 RAG 正在实施：Compose 增加 TEI CPU（Qwen3-Embedding-0.6B）、Qdrant、Redis、Celery Worker；规格、阶段提交及验收统一见 `docs/v3-rag-spec-plan.md`。当前仅基础设施与客户端，知识库/索引/评测 API/React 页面尚未开放。Agent 与 AI 安全测试集另行设计。
+- V3 RAG 正在实施：Compose 增加 TEI CPU（Qwen3-Embedding-0.6B）、Qdrant、Redis、Celery Worker；规格、阶段提交及验收统一见 `docs/v3-rag-spec-plan.md`。阶段 2 已有私有知识库/文档管理 API 和增量迁移 `20260902_01`，作业暂留 queued/dispatchPending；异步索引、RAG 评测、React 页面尚未开放。迁移只在独立测试库验证，业务升级仍须确认备份与恢复；普通新后端 ORM 依赖新增 task_type 列。Agent 与 AI 安全测试集另行设计。
 - 后端：Python、FastAPI、SQLAlchemy 2.0、Alembic、Pydantic Settings、pytest
 - 当前主前端：React 19、TypeScript、Vite、React Router、Tailwind CSS、Ant Design、Recharts、GSAP，独立目录 `frontend/` 并复用现有后端 API
 - 历史前端：Vue 3、JavaScript、Vite、Pinia、Vue Router、Axios、Element Plus、Markdown-it、DOMPurify、GSAP，位于 `vue-frontend/`，后续不再作为主要开发目标

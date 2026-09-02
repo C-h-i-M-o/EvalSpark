@@ -7,8 +7,15 @@ from app.models.response import ModelResponse
 from app.models.scoring import JudgePromptGroup, JudgePromptTemplate, RuleDictionary, RuleTerm
 from app.models.token_usage import DailyUserTokenUsage, TokenUsageLog, UserTokenQuota
 from app.models.user import User
+from app.models.knowledge_base import KnowledgeBase, KnowledgeChunk, KnowledgeDocument, RagJob
+from app.models.rag import RagResponseDetail
 
 __all__ = [
+    "KnowledgeBase",
+    "KnowledgeChunk",
+    "KnowledgeDocument",
+    "RagJob",
+    "RagResponseDetail",
     "Conversation",
     "EvaluationResult",
     "EvaluationTask",

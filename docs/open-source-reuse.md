@@ -1,6 +1,6 @@
 # 开源项目复用说明
 
-## V3 RAG 实际引入（阶段 1）
+## V3 RAG 实际引入（阶段 1—2）
 
 只实现项目所需的输入校验、归属过滤和错误分类；推理、分词、向量存储和队列使用现有开源组件。解析器与 RAG 评分将在后续阶段加入。
 
@@ -12,6 +12,7 @@
 | [Redis](https://github.com/redis/redis/releases/tag/7.2.16) / redis-py | `7.2.16-bookworm` / `6.4.0` | Celery broker；服务选 7.2 维护线 |
 | [Celery](https://docs.celeryq.dev/en/stable/getting-started/backends-and-brokers/redis.html) | `5.6.3` | JSON 队列和单并发 Worker 配置 |
 | [Hugging Face Hub](https://huggingface.co/docs/huggingface_hub/en/guides/manage-cache) / tokenizers | `1.29.0` / `0.23.1` | 固定 SHA 的只读本地分词缓存与 Token 计数 |
+| [python-multipart](https://pypi.org/project/python-multipart/0.0.32/) | `0.0.32` | 复用 Starlette 流式表单解析；项目仅加鉴权、输入总量限制和文件生命周期管理 |
 
 镜像完整 digest 固定于 `docker-compose.yml`，新增 Python 依赖固定于 `backend/pyproject.toml`。Kombu 5.6.2 的 Redis extra 要求 redis-py `<6.5`，因此不直接采用 redis-py 最新大版本。各阶段实际验证见 `v3-rag-spec-plan.md`。
 

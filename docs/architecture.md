@@ -42,7 +42,11 @@ mysql:3306（仅 Compose 内部网络）
 
 ### V3 RAG 基础设施（阶段 1）
 
-当前只接入基础设施，尚未修改普通评测流程或开放 RAG 业务入口。`app/services/rag/clients.py` 通过 HTTP 调用内网 TEI，使用官方 Qdrant SDK 查询；`app/worker.py` 提供 Celery 配置，后续阶段才注册文档作业。
+阶段 1 基础设施已完成，阶段 2 新增私有知识库管理 API；尚未开放 RAG 评测执行入口。`app/services/rag/clients.py` 通过 HTTP 调用内网 TEI，使用官方 Qdrant SDK 查询；`app/worker.py` 提供 Celery 配置，阶段 3 才注册文档作业。
+
+知识库路由复用 Cookie/RBAC 登录态，库和文档授权始终按当前用户过滤，管理员没有私有内容豁免。`knowledge_base_service.py` 管理库/文档版本、状态、行锁配额和作业事务；`rag/documents.py` 负责鉴权后的 multipart 限流、轻量格式检查和随机键文件存储。控制器不返回物理存储路径，下载仅为私有附件。
+
+文件先保存，再在库行锁内提交元数据与 `rag_jobs`，提交后通知队列；失败时只清理确认无引用的本次文件，提交结果不明时优先保留文件。事务开始前结束鉴权快照，防止 REPEATABLE READ 读到旧作业状态。阶段 2 任务尚未注册，诚实返回排队待投递；重试/重建/删除提高目标版本，清理与恢复将在阶段 3 落地。新五表及 `task_type=chat` 默认值通过增量 Alembic 提供，不回算旧评分。独立测试 Compose 已用于验证 SQL，业务库尚未升级。
 
 - TEI CPU 加载固定 revision 的 Qwen3-Embedding-0.6B，输出 1024 维向量；查询带检索指令，文档不带指令。
 - TEI 独占模型缓存写权限。后端/Worker 使用同卷的只读 `tokenizer.json`，只按固定 revision 本地加载，不联网回退、不加载模型权重。

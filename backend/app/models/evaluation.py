@@ -15,6 +15,7 @@ class EvaluationTask(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     prompt: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), default="pending")
+    task_type: Mapped[str] = mapped_column(String(16), default="chat", server_default="chat")
     visibility: Mapped[str] = mapped_column(String(16), default="public")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
