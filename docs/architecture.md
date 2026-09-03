@@ -1,5 +1,7 @@
 # 系统架构说明
 
+V3 验收环境与业务环境分离：`docker-compose.rag-test.yml` 的 `unit-runner`/`frontend-test` 断网运行回归与构建，`acceptance-runner` 使用测试 MySQL、TEI、Qdrant、Redis、Worker 与 `model-test`。只有候选/Judge 由确定性 HTTP 服务替代，Cookie 鉴权、业务路由、持久化和检索组件保持真实；API 传输为进程内 ASGI，浏览器/代理/真实模型效果另行验收。跨平台 `verify-rag` 入口、隔离范围和延期清单见 `v3-rag-spec-plan.md` 第 11 节；当前未部署或运行完整验收。
+
 MultiChatEval 采用前后端分离架构。当前主前端为 `frontend/` React 19 + TypeScript + Vite 应用，已完成对原 Vue 前端的功能替代；`vue-frontend/` 仅作为历史版本保留。v2 已冻结，后续新功能和样式维护默认在 React 前端推进，并复用同一套 FastAPI API、MySQL 数据结构和评分逻辑。
 
 ```text

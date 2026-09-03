@@ -1,5 +1,7 @@
 # 开源项目复用说明
 
+V3 阶段 7 的验收继续复用现有 pytest、httpx ASGITransport、FastAPI/StreamingResponse、Docker Compose 和前端 Vitest，不新增依赖或另接评测框架。确定性模型假服务仅承载隔离测试协议，不属于生产推理服务，也不能用于证明真实 Judge 的语义质量。入口通过显式环境文件排除业务 `.env`，依据 [Compose 环境文件规则](https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/)；测试配置已解析，运行验收延期。
+
 ## V3 RAG 实际引入（阶段 1—3）
 
 推理、分词、解析、切分、向量存储和队列使用现有开源组件；项目补充来源映射、输入限制、状态一致性和归属校验。RAG 评分仍在后续阶段。

@@ -16,6 +16,8 @@ MultiChatEval 是一个“面向多模型问答的对话质量评估系统”。
 
 ## 当前技术栈
 
+- 阶段 7 已补充 `scripts/verify-rag.ps1` / `scripts/verify-rag.sh` 的 unit/integration 独立 Docker 验收入口、假模型 HTTP 服务及 API 联合用例，未运行。配置解析、PowerShell 语法和 Git 差异静态检查通过不等于 pytest/Vitest/构建通过。脚本固定项目 `evalspark-rag-test`、环境文件 `docker/rag-test.env`，只共享模型缓存，正文/队列/向量/MySQL 使用测试卷。继续保持 Docker 关闭、不启宿主机运行时；资源充足设备按合并计划第 11 节验收，不用包含宿主机工具和 Vue 检查的旧 `verify-react-rewrite.sh`。
+
 - V3 RAG 正在实施：Compose 增加 TEI CPU（Qwen3-Embedding-0.6B）、Qdrant、Redis、Celery Worker；规格、阶段提交及验收统一见 `docs/v3-rag-spec-plan.md`。阶段 1—5 已实现私有知识库、四格式索引、逐模型检索回答、证据快照、用量、三轮联合评分、任务 API/历史/反馈、私有内容隔离与超期收尾代码。阶段 6 已接入 React `/knowledge-bases`、`/rag`、历史类型筛选及引用/评分/费用 UI，行为放 `.ts` hooks，Vue 不改。当前设备内存受限且 Docker 已关闭，老大允许延期测试和本地部署，优先完成各阶段代码；不要重启 Docker，阶段 5—6 新增测试、前端构建、浏览器及真实模型全链路待高内存设备验收，不得把延期记为通过。迁移 `20260902_01/02` 仅应用于独立测试库，业务升级仍须确认备份与恢复；新后端依赖 task_type 列和块正文 MEDIUMTEXT。Agent 与 AI 安全测试集另行设计。
 - 后端：Python、FastAPI、SQLAlchemy 2.0、Alembic、Pydantic Settings、pytest
 - 当前主前端：React 19、TypeScript、Vite、React Router、Tailwind CSS、Ant Design、Recharts、GSAP，独立目录 `frontend/` 并复用现有后端 API
@@ -316,10 +318,10 @@ Final = 0.90 × BaseFinal + 0.10 × FeedbackScore  # 已有反馈
 
 优先推进的任务是：
 
-1. 启动 Docker Desktop 后，Windows 使用 `.\scripts\start-local.ps1`，macOS 或 Linux 使用 `./scripts/start-local.sh` 构建并运行完整 Compose 开发栈。
+1. 当前设备不重启 Docker；在资源充足设备先运行 `verify-rag` 的 unit 和 integration 验收。业务库备份/恢复和迁移另获授权后，才使用 `start-local` 启动完整开发栈。
 2. 确认 React 主前端能调用后端真实模型接口。
 3. 确认逐 token 流式展示、“评分中……”状态和全局思考模式行为正常。
 4. 验证评分结果、点赞/点踩和公开评论均正确持久化到 MySQL。
 5. 验证公开任务跨用户可见、私有任务仅创建者可见。
-6. React 主前端收尾验收可运行 `./scripts/verify-react-rewrite.sh`。
+6. React/V3 自动验收使用 `scripts/verify-rag.ps1 -Mode unit` 或 `bash scripts/verify-rag.sh unit`，真实浏览器验收另行记录；Vue 不参与本次开发或验收。
 7. 如需查看旧实现，可使用 `./scripts/start-local-vue.sh` 启动历史 Vue 前端。

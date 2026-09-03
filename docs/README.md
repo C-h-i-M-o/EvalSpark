@@ -12,6 +12,7 @@
 - `system-features-status.md`：系统功能状态和后续维护建议。
 - `docker-development-spec-plan.md`：全栈 Docker 开发环境的需求、方案、实施步骤和验收标准。
 - `v3-rag-spec-plan.md`：V3 RAG 需求与实施合并文档，包含已批准设计、分阶段提交和实际验收；计划中的后续能力不代表已实现。
+- V3 阶段 7 的跨平台 `verify-rag` 入口、独立测试服务、实际静态检查结果及未执行的自动/手工门禁统一见合并计划第 11—12 节；当前 Docker 仍关闭，不以测试代码存在代替执行通过。
 - React RAG 入口代码为 `/knowledge-bases`、`/rag` 与 `/history` 类型筛选；阶段 5—6 的新增测试/构建/浏览器验收按资源受限安排延期，不代表已部署可用。
 - 阶段 2 知识库与阶段 5 RAG 任务 API 见 `api.md`；新表与业务迁移门禁、独立 `docker-compose.rag-test.yml` 测试方式见 `database.md`。测试配置不连接业务库，当前资源不足的未执行项见合并计划。
 - `uml.md`：当前实现对应的图示文档。

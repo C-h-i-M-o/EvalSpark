@@ -509,7 +509,7 @@ PowerShell 脚本不得使用 `Start-Process` 创建宿主机前后端进程；B
 - **数据库误删：** 所有自动化禁止 `down -v`，真实运行验收前再次取得授权，停止/重启只使用保留卷的命令。
 - **历史 Vue 代码：** `vue-frontend/` 不进入 Compose 主流程，也不在本次改动范围内。
 
-## 10. 2026-09-01 真实运行验收记录
+## 10. 2026-09-01 真实运行验收记录（V3 之前的基线）
 
 - `docker compose up --build -d` 已完成；`mysql`、`backend`、`frontend` 为 healthy，`migrate` 以退出码 `0` 完成。
 - 首次运行发现初始化 SQL 未标记 Alembic 基线，迁移在重复添加 `users.role` 时失败；已通过失败测试复现，并由初始化脚本写入 `20260612_01` 基线修复。
@@ -517,3 +517,9 @@ PowerShell 脚本不得使用 `Start-Process` 创建宿主机前后端进程；B
 - 后端健康接口、React 页面和前端同源 `/api/health` 代理均返回 HTTP 200。
 - 后端源码变更触发 WatchFiles 自动重载；前端源码变更无需重建镜像即可由 Vite 返回更新后的模块；临时验收改动已恢复。
 - 普通 `docker compose down` 后重新启动，迁移版本、表数量和数据计数保持一致；未执行 `down -v`，开发栈按老大要求保持运行。
+
+## 11. V3 资源受限交付与独立验收
+
+2026-09-03：当前 Docker 已关闭，老大允许延期运行验证并优先交付代码；以上基线实测不能视为 V3 新功能验收通过。新入口为 `scripts/verify-rag.ps1` / `bash scripts/verify-rag.sh` 的 `unit`、`integration` 两档，详细顺序、模型缓存准备、保留卷停止命令与人工门禁只维护在 `v3-rag-spec-plan.md` 第 11 节。后端源码和测试所需根文件只读挂载，不挂载 Docker socket 或业务 `.env`；前端测试直接使用新构建镜像中的依赖/源码，不借用业务 node_modules。Vue 与宿主机 Python/Node/pnpm 不参与。
+
+测试项目固定 `evalspark-rag-test`，显式空环境文件 `docker/rag-test.env` 避免 Compose 自动加载业务配置；测试模型不连接外部上游，数据和端口隔离，只有固定模型缓存卷共享。脚本不会调用业务 `migrate`、业务启动脚本或任何清卷操作。完整档会先停止测试 Worker 以串行完成数据库故障回归，再启动索引组件；不停止业务服务。测试配置解析和 PowerShell 语法已检查，但 pytest/Vitest/构建/实际脚本执行/完整部署均未执行，暂不作可部署结论。

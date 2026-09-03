@@ -29,7 +29,9 @@
 
 业务升级前必须另行确认：实际父版本、备份位置与校验、DDL 元数据锁影响、恢复窗口和权限。新增 `task_type` 后 ORM 依赖该列，不能跳过迁移直接启动新后端。迁移不提供自动破坏性 downgrade；恢复使用经批准的备份流程。默认完整 Compose 会执行 `migrate`，未批准业务升级时只使用独立测试 Compose。
 
-隔离测试：`docker compose --env-file .env.example -f docker-compose.rag-test.yml up -d mysql-test`，随后 `docker compose --env-file .env.example -f docker-compose.rag-test.yml run --rm runner`。测试服务无宿主机端口、无业务网络/卷、无业务 `.env` 挂载；运行前强制校验开关、主机 `mysql-test` 和数据库名。每轮使用唯一测试用户并保留测试库，不清空任何表或数据卷。
+隔离测试统一使用 `scripts/verify-rag.ps1 -Mode integration` 或 `bash scripts/verify-rag.sh integration`，完整执行顺序见 `v3-rag-spec-plan.md` 第 11 节。入口固定项目 `evalspark-rag-test` 和 `docker/rag-test.env`，先停测试 Worker、运行迁移/数据库回归，再启动索引服务与假模型验收。测试服务无宿主机端口、无业务网络/数据卷、无业务 `.env` 挂载；运行前强制校验开关、主机 `mysql-test` 和数据库名。每轮使用唯一测试用户/供应商并保留测试库，不清空任何表或数据卷；只有模型文件缓存与现有开发栈共用。
+
+阶段 7 只新增测试入口，不新增业务迁移。测试配置解析已通过；新增两候选 API、三轮评分、反馈/取消、并发记账与删除后快照联合验证未执行，仍不得据此升级业务库或声称全部 MySQL 验收通过。
 
 ## V3 阶段 4 快照与用量
 

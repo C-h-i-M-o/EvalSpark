@@ -68,6 +68,10 @@ MultiChatEval/
 
 ## 快速开始
 
+当前资源不足设备不启动 Docker。V3 代码在资源充足设备的验收入口为 `scripts/verify-rag.ps1 -Mode unit` / `-Mode integration`（Linux/macOS 使用 `bash scripts/verify-rag.sh unit` / `integration`）。它们使用独立测试项目，不读取业务 `.env` 或升级业务库；范围与未执行清单见 [RAG 验收与交接](docs/v3-rag-spec-plan.md#11-验证命令与执行边界)。阶段 7 已编写测试及脚本，仅配置/语法/差异静态检查通过，完整测试仍未执行。
+
+下述默认开发栈命令会运行数据库迁移；已有业务数据升级前，必须先确认备份、恢复和对应迁移授权。
+
 默认开发环境只要求安装并启动 Docker Desktop（包含 Docker Compose）。Python、Node.js、pnpm、MySQL、后端和 React 前端均在容器中运行。
 
 首次运行先准备根目录 `.env`：

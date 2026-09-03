@@ -1,6 +1,22 @@
 name: evalspark-rag-test
 
 # 独立测试项目：不读取业务 env_file、不复用业务网络或数据卷。
+x-backend-test: &backend_test
+  image: evalspark-rag-backend:test
+  build:
+    context: ./backend
+    dockerfile: Dockerfile.dev
+  volumes:
+    - ./backend:/workspace/backend:ro
+    - ./frontend:/workspace/frontend:ro
+    - ./scripts:/workspace/scripts:ro
+    - ./.env.example:/workspace/.env.example:ro
+    - ./docker-compose.yml:/workspace/docker-compose.yml:ro
+    - ./docker-compose.rag-test.yml:/workspace/docker-compose.rag-test.yml:ro
+    - ./docker:/workspace/docker:ro
+  working_dir: /workspace/backend
+  mem_limit: 1g
+
 services:
   mysql-test:
     image: mysql:8.4
@@ -19,26 +35,42 @@ services:
       retries: 30
 
   runner:
-    image: evalspark-backend:dev
+    <<: *backend_test
     environment:
       DATABASE_URL: mysql+aiomysql://multichateval:rag-test-only@mysql-test:3306/multichateval_rag_test
       RAG_INTEGRATION_TESTS: "1"
       APP_ENV: test
       JWT_SECRET_KEY: rag-test-only-key-with-at-least-32-characters
       RAG_DOCUMENTS_DIR: /tmp/rag-documents
-    volumes:
-      - ./backend:/workspace/backend:ro
-      - ./frontend:/workspace/frontend:ro
-      - ./scripts:/workspace/scripts:ro
-      - ./.env.example:/workspace/.env.example:ro
-      - ./docker-compose.yml:/workspace/docker-compose.yml:ro
-      - ./docker/mysql/init/001_schema.sql:/workspace/docker/mysql/init/001_schema.sql:ro
-    working_dir: /workspace/backend
     depends_on:
       mysql-test:
         condition: service_healthy
-    command: ["python", "-m", "pytest", "-p", "no:cacheprovider", "tests/test_knowledge_base_service.py", "tests/test_knowledge_base_api.py", "tests/test_rag_migrations.py", "-q"]
+    command: ["python", "-m", "pytest", "-p", "no:cacheprovider", "tests/test_knowledge_base_service.py", "tests/test_knowledge_base_api.py", "tests/test_rag_migrations.py", "tests/test_rag_jobs.py", "tests/test_rag_indexing.py", "tests/test_rag_chunk_storage.py", "tests/test_rag_worker.py", "tests/test_rag_usage_mysql.py", "-q"]
     mem_limit: 1g
+
+  unit-runner:
+    <<: *backend_test
+    profiles: [unit]
+    network_mode: none
+    environment:
+      DATABASE_URL: mysql+aiomysql://test:test@invalid:3306/unit_test
+      APP_ENV: test
+      JWT_SECRET_KEY: rag-test-only-key-with-at-least-32-characters
+      RAG_INTEGRATION_TESTS: "0"
+      RAG_LIFECYCLE_TESTS: "0"
+      RAG_ACCEPTANCE_TESTS: "0"
+    command: ["python", "-m", "pytest", "-p", "no:cacheprovider", "-q"]
+
+  frontend-test:
+    profiles: [unit]
+    image: evalspark-rag-frontend:test
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    network_mode: none
+    # 使用新镜像内的源代码和依赖，不挂载业务 node_modules 或输出 dist 到宿主机。
+    command: ["pnpm", "test"]
+    mem_limit: 2g
 
   qdrant-test:
     profiles: [lifecycle]
@@ -83,7 +115,7 @@ services:
 
   worker-test:
     profiles: [lifecycle]
-    image: evalspark-backend:dev
+    image: evalspark-rag-backend:test
     environment: &lifecycle_environment
       DATABASE_URL: mysql+aiomysql://multichateval:rag-test-only@mysql-test:3306/multichateval_rag_test
       APP_ENV: test
@@ -118,6 +150,28 @@ services:
       - rag_cached_model:/data:ro
       - rag_test_documents:/test-documents
     command: ["python", "-m", "pytest", "-p", "no:cacheprovider", "tests/test_rag_lifecycle.py", "-q"]
+
+  model-test:
+    profiles: [lifecycle]
+    image: evalspark-rag-backend:test
+    volumes:
+      - ./backend/tests/integration:/test-model:ro
+    command: ["python", "-m", "uvicorn", "fake_models:app", "--app-dir", "/test-model", "--host", "0.0.0.0", "--port", "8080", "--no-access-log"]
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  acceptance-runner:
+    profiles: [lifecycle]
+    extends:
+      service: lifecycle-runner
+    environment:
+      RAG_ACCEPTANCE_TESTS: "1"
+      RAG_TOKENIZER_TESTS: "1"
+    command: ["python", "-m", "pytest", "-p", "no:cacheprovider", "tests/test_rag_documents.py", "tests/test_rag_lifecycle.py", "tests/test_rag_usage.py", "tests/integration/test_rag_docker.py", "-q"]
 
 volumes:
   rag_test_mysql:

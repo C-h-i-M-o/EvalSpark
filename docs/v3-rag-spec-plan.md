@@ -12,7 +12,7 @@
 
 **规格位置：** 本文第 1—8 节；实施与验收位置：第 9—12 节。
 
-**状态：** 2026-09-02 用户已确认本文并批准开发；阶段 0 提交为 `63d7777`，阶段 1—2 代码和验收完成（提交 ID 见 Git 日志），阶段 3 代码已实现，按下述资源受限约定交付；阶段 4—7 继续实施。按用户要求直接使用当前 `dev`，不创建 worktree；允许依赖/镜像/模型下载及新增服务、测试容器运行和测试数据写入。各阶段单独提交，不自动推送。
+**状态：** 2026-09-02 用户已确认本文并批准开发；阶段 0 提交为 `63d7777`，阶段 1—2 代码和验收完成（提交 ID 见 Git 日志），阶段 3—6 代码已提交，按下述资源受限约定交付；阶段 7 准备隔离测试与交接材料。按用户要求直接使用当前 `dev`，不创建 worktree；允许依赖/镜像/模型下载及新增服务、测试容器运行和测试数据写入。各阶段单独提交，不自动推送。
 
 **资源受限验收调整（2026-09-02）：** 老大明确允许跳过部分测试和本地部署，优先完成开发，后续在资源充足设备验收。当前不再启动重型 Embedding 或完整开发栈；保留测试代码及运行说明，在资源允许时执行轻量检查。阶段代码可在记录已执行证据和延期项后提交、进入下一阶段，不以真实模型全链路阻塞开发。阶段 7 区分“测试及交付材料已准备”和“实机验收通过”；未执行项不得勾选通过。业务库升级、外部模型调用费用和私有资料传输的授权边界不变。
 
@@ -368,8 +368,8 @@ Final = 0.90 × BaseFinal + 0.10 × FeedbackScore          # 有反馈
 | 3 | 可恢复的异步解析、切分、索引和清理 | `feat(rag): 实现异步索引与可恢复生命周期` | 代码交付；四格式真实模型全链路延期 |
 | 4 | 逐模型检索回答内核、快照和用量 | `feat(rag): 实现逐模型检索回答与证据快照` | 代码交付、轻量回归通过；真实数据库并发和模型联调延期 |
 | 5 | 三轮评分、正式 API 接通、历史与反馈一致性 | `feat(rag): 接入忠实度引用评审与评分持久化` | 代码提交 `2764d90`；新增运行回归延期 |
-| 6 | React 知识库、RAG 工作台和历史详情 | `feat(rag): 完成知识库与 RAG 评测界面` | 页面与接点代码已编写；Vitest/构建和浏览器验收延期 |
-| 7 | Docker 集成、恢复/权限验证及交付记录 | `test(rag): 完成 Docker 集成验收与交付文档` | 未开始 |
+| 6 | React 知识库、RAG 工作台和历史详情 | `feat(rag): 完成知识库与 RAG 评测界面` | 代码提交 `8591c61`；Vitest/构建和浏览器验收延期 |
+| 7 | Docker 集成测试入口及交付记录 | `test(rag): 补充隔离验收入口与交接清单` | 测试及材料已编写；实机验收延期 |
 
 阶段 1—3 不开放 RAG 任务执行入口；阶段 4 只交付可测试的内部链路，在阶段 5 评分和持久化闭环完成后才开放 `taskType=rag`，不向用户返回临时伪分数。阶段 6 才加入导航入口。
 
@@ -636,6 +636,10 @@ expect(sentBody.modelIds).not.toContain(sentBody.judgeModelId);
 
 ### 阶段 7：隔离集成与交付
 
+实施约定（2026-09-03）：继续保持 Docker 关闭，不启动本地运行时。`verify-rag` 提供 `unit` 与 `integration` 两档，两种系统脚本只编排同一独立 Compose，显式固定项目名与测试环境文件，不加载业务 `.env`。构建使用专用测试镜像标签，单元容器断网、不启动数据库；完整档先运行隔离迁移，再启动测试 TEI/Qdrant/Redis/Worker 和假模型服务。仅共享固定模型缓存，正文/队列/向量/MySQL 使用测试卷；脚本不自动删除任何卷，不停止既有业务服务。首次缺少模型缓存时给出明确的单卷创建提示，不自动清理或替换缓存。
+
+完整测试保留真实 Cookie JWT 鉴权、API 路由、MySQL、Worker、Embedding、Qdrant 和 OpenAI-compatible HTTP 适配器，只把收费的候选/Judge 替换为测试 Compose 内的确定性 HTTP 服务。测试模型由唯一测试供应商承载，只写测试库；假服务按请求阶段校验结构，分别返回查询、SSE 回答和三轮四维评审，使用合成资料，不接收真实密钥。API 使用进程内 ASGI 客户端，不能代替真实浏览器/代理/断网断线验收。覆盖成功/候选失败隔离、事件先后、私有历史/反馈/评论、已知用量与多币种、删除后快照仍可读；四格式及重建沿用现有生命周期用例，不复制实现。预期断言针对真实边界的错误分支或缺失写入，不以扫描源代码字符串充当测试。
+
 **文件：** 完成已有 `docker-compose.rag-test.yml`，新增 `backend/tests/integration/test_rag_docker.py`；按确实需要新增 `scripts/verify-rag.ps1`、`scripts/verify-rag.sh`，两者调用同一 Compose 测试定义；不复制一套业务逻辑。更新 `docs/system-features-status.md`、`docs/api.md`、`docs/database.md`、`docs/architecture.md`、`docs/open-source-reuse.md`、`docs/docker-development-spec-plan.md`、`docs/README.md`、`README.md`、`AGENTS.md` 和本文验收记录。
 
 - [ ] 重新确认当前数据库和 Volume 的实际名字；复核隔离项目 `evalspark-rag-test` 不读取业务 `.env`，测试凭据仅在测试配置中，数据库不使用 external Volume 或生产连接串。
@@ -645,6 +649,12 @@ expect(sentBody.modelIds).not.toContain(sentBody.judgeModelId);
 - [ ] 获得独立外部模型调用与费用授权后，用老大指定的非敏感文档和现有模型配置做一次真实改写—检索—回答—三轮 Judge；不自行新建用户或写入业务模型配置。
 - [ ] 测量指定样本的块数、解析/Embedding/索引耗时、检索延迟及内存峰值；记录机器和规模，未测 100,000 块则明确标记，不能外推容量/性能已通过。
 - [ ] 完成代码、文档及 README/AGENTS 一致性检查，填写第 12 节实际证据后提交。未获数据库或真实调用许可时保留对应验收“未执行”，不标记整个阶段完成。
+
+阶段 7 代码交付记录（2026-09-03）：新增 `unit-runner`、`frontend-test`、`model-test`、`acceptance-runner` 和专用空环境文件 `docker/rag-test.env`。后端/前端分别使用 `evalspark-rag-backend:test` / `evalspark-rag-frontend:test`，不覆盖开发镜像标签。Bash 与 PowerShell 入口均先校验配置，单元容器断网；完整档先停当前测试 Worker、运行隔离迁移与数据库回归，再启动真实索引组件，避免 Worker 干扰故障注入测试。补充 Bash 的 CLI 替身行为测试（固定项目/环境文件、构建失败立即停止、缺缓存拒绝继续、未知模式不调用 Docker），不是扫描脚本文字；PowerShell 实际执行仍待 Windows Docker 环境验证。
+
+`test_rag_docker.py` 保留真实 Cookie 鉴权和 MySQL 写入、真实四格式生命周期组件及模型 HTTP 适配器，新增两候选流式评分、历史/隐私/互动、98 Token/回答的已知用量、CNY/USD 分别汇总、删除后快照保留、候选改写失败隔离用例；仅 API 请求传输使用进程内 ASGI，外部模型为测试内假服务。现有生命周期用例另覆盖四格式、漏发通知恢复、重建与物理清理。用例已编写但没有执行，不能用假模型固定评分宣称真实 Judge 语义效果合格。
+
+实际执行仅包括不依赖 daemon 的 `docker compose ... config --quiet`、脱敏字段核对、PowerShell Parser 语法检查和 Git 差异检查，均通过；解析结果项目 `evalspark-rag-test`、测试库主机 `mysql-test`、单元 `network_mode=none` 且无依赖，全部服务无宿主机端口。未启动 Docker、未构建镜像、未运行 pytest/Vitest/TypeScript/浏览器、未连接数据库或收费模型。完整集成、恢复故障注入、实机性能/容量及业务部署仍未验收。
 
 ## 11. 验证命令与执行边界
 
@@ -665,29 +675,62 @@ git status --short --branch
 
 ### 11.2 后续单元验证
 
-下列命令仅在代码实施、镜像构建及容器执行获得授权后运行。`--no-deps` 避免启动 migrate，显式假数据库 URL 防止普通单元测试意外接入真实库；禁止单元测试自行连接此 URL。
+在资源充足设备运行以下入口。脚本只使用独立测试 Compose，显式假数据库 URL、断网及 `--no-deps` 避免单元容器连接或启动业务库；构建阶段仍可能下载官方依赖。先完整执行 `unit`，修复失败后再执行 `integration`。
 
 ```powershell
-docker compose config --quiet
-docker compose config --services
-docker compose run --rm --no-deps -e DATABASE_URL=mysql+aiomysql://test:test@invalid:3306/unit_test backend python -m pytest tests/test_rag_clients.py tests/test_rag_configuration.py -q
-docker compose run --rm --no-deps -e DATABASE_URL=mysql+aiomysql://test:test@invalid:3306/unit_test backend python -m pytest tests/test_knowledge_base_api.py tests/test_knowledge_base_service.py tests/test_rag_storage.py -q
-docker compose run --rm --no-deps -e DATABASE_URL=mysql+aiomysql://test:test@invalid:3306/unit_test backend python -m pytest tests/test_rag_documents.py tests/test_rag_indexing.py -q
-docker compose run --rm --no-deps -e DATABASE_URL=mysql+aiomysql://test:test@invalid:3306/unit_test backend python -m pytest tests/test_rag_evaluation.py tests/test_rag_usage.py tests/test_rag_judge.py tests/test_rag_evaluation_api.py tests/test_rag_scoring.py tests/test_rag_privacy.py tests/test_rag_service.py -q
-docker compose run --rm --no-deps -e DATABASE_URL=mysql+aiomysql://test:test@invalid:3306/unit_test backend python -m pytest tests/test_evaluation_api.py tests/test_evaluation_service.py tests/test_feedback_stats_api.py tests/test_feedback_stats_service.py tests/test_token_quota_service.py tests/test_token_usage_api.py -q
-docker compose run --rm --no-deps frontend pnpm test
-docker compose run --rm --no-deps frontend pnpm build
+.\scripts\verify-rag.ps1 -Mode unit
+.\scripts\verify-rag.ps1 -Mode integration
 ```
 
-每个阶段只运行已经创建的测试文件。需要仓库根目录的现有启动脚本/Compose 静态测试，使用测试 runner 的只读全仓挂载，不能因 backend 容器只挂载 `/app` 而跳过后宣称全量测试通过。
+```bash
+bash scripts/verify-rag.sh unit
+bash scripts/verify-rag.sh integration
+```
 
-不得输出完整 `docker compose config`，避免 `.env` 展开泄密。不得在未授权时执行项目启动脚本、`docker compose up` 或 Alembic upgrade：现有 Compose 会自动运行迁移服务。
+单元档依次执行后端 `pip check`、全量 pytest、React Vitest、TypeScript/Vite 构建；不处理 Vue。后端只读挂载源码、前端/脚本/Compose/初始化 SQL，不挂载业务 `.env` 或 Docker socket。需要 Docker CLI 的既有 Compose 测试会在后端镜像中明确跳过，真实服务/分词缓存用例也会跳过；保留实际 passed/skipped/warnings 数量，不把有跳过的报告称为全部验收通过。可在宿主机另用同一 `--env-file`、`-f` 和 `--project-name` 参数运行 `config --quiet` 做非启动检查。
+
+完整档不隐式执行前端测试。它在 `multichateval_rag_test` 中运行迁移兼容、知识库/API、租约、替身索引、块存储、恢复与并发入账回归，再运行真实 Qwen 分词、四格式 Worker 生命周期、用量和假模型 HTTP/API 闭环。**必须串行运行，不要同时启动多份验收或手工重启正在验证的测试服务。** 成功和失败都保留服务与测试数据；每次使用唯一测试用户/供应商/库名，不清空表。完整档会启动约 4 GiB 限额的 TEI 及其他服务，该限额不是整栈资源需求保证。
+
+首次缺少模型缓存卷时脚本会停止。确认下载许可后，可手动执行 `docker volume create evalspark_rag_model_cache`，再重跑完整档由固定 TEI 下载指定 revision；已有缓存卷不要删除或替换。只共享模型缓存，不共享业务文档/向量/队列/数据库卷。模型离线搬迁、缓存损坏或网络下载失败须单独处理，不能改用随机 revision 降级。
+
+测试结束后若需要释放测试服务内存，执行下列保留卷的停止命令；这不是清理数据。脚本从不自动执行 `down -v`、`prune` 或移除卷。
+
+```powershell
+docker compose --project-name evalspark-rag-test --env-file docker/rag-test.env -f docker-compose.rag-test.yml --profile lifecycle stop
+```
+
+不得输出业务完整 `docker compose config`，避免 `.env` 展开泄密。不得在未取得业务迁移授权时运行 `start-local` 或默认业务 `docker compose up`：它会自动运行迁移服务。旧 `verify-react-rewrite.sh` 包含宿主机工具和 Vue 检查，不用于此次 V3 验收。
 
 ### 11.3 集成门禁
 
 隔离 Compose 文件必须完全独立，不通过覆盖现有生产服务的部分字段来“猜测”是否隔离。测试数据操作在测试文件中使用明确连接配置，执行前打印脱敏项目/服务/库名供核对，不打印密码。
 
 集成首次启动、实际业务库迁移和测试清理是三项不同操作。即使隔离测试迁移通过，升级业务库仍需先报告迁移内容、备份位置、预期锁表影响和恢复方案，再获得明确许可。未经许可不生成或读取数据库转储。
+
+### 11.4 自动入口以外的验收清单
+
+以下仍是显式未执行门禁，不随上述脚本退出码 0 自动通过：
+
+- Windows PowerShell 与 Linux/macOS Bash 实际入口均需至少执行一次并保留日志，记录 Git SHA、Docker/Compose 版本、硬件和镜像构建结果。
+- 在测试环境按下方 `RAG_RESTART_TESTS=1` 操作说明执行 Worker 停启恢复；另做 broker 中断、索引半失败、重建/删除并发与旧 Worker 晚写。通用脚本不会替操作者注入容器故障。
+- React 通过真实代理/浏览器验证 Cookie 登录、四格式上传/下载、索引状态、两候选同名 `[S1]` 只展开各自证据、未知引用、长文滚动、三轮评分、取消/离开页面、切换库旧响应保护、历史/反馈/私有评论，以及 320/768/1280 宽度和键盘焦点。静态渲染测试不能代替这些交互。
+- 停止测试 RAG 依赖后验证普通 chat、登录和旧历史仍可用；恢复后检查用户没有收到伪成功。进程内 ASGI 用例不覆盖网络断线、页面刷新或反向代理超时。
+- 经独立授权，用指定非敏感文档和指定收费模型验证实际回答/引用和三轮 Judge 的语义判定、失败说明及账单；当前假服务固定评分只能验证协议与持久化，不能证明模型效果或抗注入质量。
+- 记录文档大小/格式/块数、各阶段耗时、检索延迟与容器/主机内存峰值。并发、大文档和 100,000 块未实测之前，禁止宣称容量或性能目标已达成。
+- 业务升级 `20260902_01`（RAG 新表、task_type）和 `20260902_02`（块正文 MEDIUMTEXT）前确认可恢复备份、版本和停写窗口，再申请对应迁移授权；不复制测试用户/供应商/假模型到业务库。
+
+Worker 恢复用例需完整档已初始化测试库、Qdrant 和 Redis，且没有其他测试正在运行。终端 1 先执行以下两条；看到 `RAG_RESTART_READY` 后，在 180 秒内从终端 2 启动 Worker。用例只创建并清理自己的合成文档，不重放收费模型，也不自动控制 Docker：
+
+```powershell
+docker compose --project-name evalspark-rag-test --env-file docker/rag-test.env -f docker-compose.rag-test.yml --profile lifecycle stop worker-test
+docker compose --project-name evalspark-rag-test --env-file docker/rag-test.env -f docker-compose.rag-test.yml run --rm --no-deps -e RAG_RESTART_TESTS=1 lifecycle-runner python -m pytest -p no:cacheprovider tests/test_rag_lifecycle.py::test_real_worker_recovers_expired_cleanup_lease_without_embedding -s -q
+```
+
+终端 2：
+
+```powershell
+docker compose --project-name evalspark-rag-test --env-file docker/rag-test.env -f docker-compose.rag-test.yml --profile lifecycle up -d worker-test
+```
 
 ## 12. 验收证据与交接规则
 
@@ -697,10 +740,10 @@ docker compose run --rm --no-deps frontend pnpm build
 | 依赖版本 | 镜像 digest、模型 SHA、包版本、兼容性结果 | 阶段 1 已验证，见第 10 节版本与实测记录 |
 | 数据升级 | 隔离库迁移前后结构、旧任务兼容、无历史改分 | 阶段 2 独立 MySQL 通过；业务库未迁移 |
 | 索引 | 四格式来源、块上限、重复/中断恢复、版本过滤 | 解析/真实 Qwen 分词、MySQL 故障与版本、真实 Qdrant、Worker 停启恢复通过；四格式真实模型全链路延期 |
-| 评测 | 两候选不同查询与证据、Top-5、失败隔离、流式事件 | 阶段 4 假客户端及 SQLite 定向测试通过；阶段 5 接入后的全链路用例未执行 |
+| 评测 | 两候选独立查询与各自证据、Top-5、失败隔离、流式事件 | 阶段 4 假客户端及 SQLite 定向测试通过；阶段 5/7 接入后的全链路用例已编写、未执行；各自检索结果允许自然重叠 |
 | Judge | 有效轮数/范围边界、引用语义判定、公式样例、反馈重算 | 未执行 |
 | 权限 | 所有者/其他用户/管理员的内容与互动访问矩阵 | 知识库/文档 API 权限矩阵通过；阶段 5 RAG 评测与互动用例已编写、未执行 |
-| 删除 | 当前文件/文本/向量清理，历史快照保留且不可越权 | 删除墓碑/幂等、立即禁下载、真实 Qdrant 清理与 Worker 过期租约物理清理通过；完整索引后删除延期，历史快照待阶段 4—5 |
+| 删除 | 当前文件/文本/向量清理，历史快照保留且不可越权 | 删除墓碑/幂等、立即禁下载、真实 Qdrant 清理与 Worker 过期租约物理清理通过；完整索引后删除、历史快照与越权联合用例已编写、未执行 |
 | 前端 | Vitest、TypeScript/Vite 构建、浏览器关键路径 | 未执行 |
 | 实际部署 | Docker 实连、普通评测降级隔离、模型调用结果 | 基础依赖实连、CPU Embedding、Worker、断网 health 通过；完整 RAG 未执行 |
 | 性能与容量 | 实测样本规模、耗时、内存；未测上限明确披露 | 仅阶段 1 短文本/预热采样；大文档、并发、100,000 块容量与峰值未测 |
