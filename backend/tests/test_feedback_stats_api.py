@@ -75,7 +75,10 @@ def test_admin_feedback_stats_returns_activity_page(monkeypatch: pytest.MonkeyPa
         model_config_id: int | None,
         page: int,
         page_size: int,
+        *,
+        user_id: int,
     ) -> dict[str, object]:
+        assert user_id == 1
         assert (range_name, activity_type, model_config_id, page, page_size) == (
             "30d",
             "comment",

@@ -12,7 +12,7 @@
 - `system-features-status.md`：系统功能状态和后续维护建议。
 - `docker-development-spec-plan.md`：全栈 Docker 开发环境的需求、方案、实施步骤和验收标准。
 - `v3-rag-spec-plan.md`：V3 RAG 需求与实施合并文档，包含已批准设计、分阶段提交和实际验收；计划中的后续能力不代表已实现。
-- 阶段 2 知识库 API 见 `api.md`；新表与业务迁移门禁、独立 `docker-compose.rag-test.yml` 测试方式见 `database.md`。测试配置不连接业务库。
+- 阶段 2 知识库与阶段 5 RAG 任务 API 见 `api.md`；新表与业务迁移门禁、独立 `docker-compose.rag-test.yml` 测试方式见 `database.md`。测试配置不连接业务库，当前资源不足的未执行项见合并计划。
 - `uml.md`：当前实现对应的图示文档。
 - `open-source-reuse.md`：开源项目参考和复用说明。
 - `demo-v1.3-development-plan.md`：demo-v1.3 六阶段开发计划和验收目标。

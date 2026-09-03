@@ -573,16 +573,26 @@ assert quota_total_after_replay == quota_total_after_first_finish
 
 ### 阶段 5：三轮评审、API 闭环与回归
 
-**文件：** 新增 `backend/app/services/rag/judge.py`、`backend/tests/test_rag_judge.py`、`test_rag_evaluation_api.py`、`test_rag_history_access.py`；修改 `backend/app/api/v1/evaluation.py`、`schemas/evaluation.py`、`services/evaluation_service.py`、`services/feedback_stats_service.py` 及其对应现有测试。按需要扩展 RAG 结构迁移，不改旧任务分值。同步 API、数据库、架构和功能状态文档。
+实施细化（2026-09-02）：联合 Judge 每轮严格输出四维数字及断言/证据明细，至少两轮完整有效且任一维度范围不大于 2 才出分；保留结构化原始结果与脱敏错误，不保存异常响应摘要。候选使用不存在的引用由 Judge 记录在 invalidCitationLabels 并评价，Judge 自己把未知标签当作有效证据则判该轮无效。四维和基础分使用 Decimal，反馈从保存的未显示舍入基础分重算；RAG 分派不经过普通评分 schema 的默认公式。
+
+不新增工作流平台或恢复时重放模型。RAG 编排设置 55 分钟总执行上限（候选/Judge 单次仍沿用不超过 600 秒配置），Worker 现有恢复入口只收尾超过 60 分钟的 pending RAG 任务，留 5 分钟取消与记账余量。收尾/阶段写入采用先任务后回答的当前读行锁；已终结或超过有效期的任务拒绝后续写入。恢复只补记已持久化用量，不影响仍处有效期内任务，不新增业务迁移。正常取消在等待子协程退出后立即收尾，不必等超期。
+
+RAG 流式入口在发送 NDJSON 头之前完成模型/Judge、额度、知识库和任务快照准备；普通 chat 路径保持原行为。公开任务条件限定 taskType=chat，防止异常可见性字段使 RAG 泄露。管理员只读取无正文聚合的 RAG 互动信息，明细查询在 SQL 中排除非本人 RAG；不先加载他人私有正文再在 UI 隐藏。
+
+**文件：** 新增 `backend/app/services/rag/judge.py`、`scoring.py`、`service.py`、`backend/tests/test_rag_judge.py`、`test_rag_evaluation_api.py`、`test_rag_scoring.py`、`test_rag_privacy.py`、`test_rag_service.py`；修改任务/统计 API、schema、评测服务、持久化及恢复服务和对应测试。不新增迁移，不改旧任务分值。同步 API、数据库、架构和功能状态文档。
 
 **接口：** `RagJudgeRun` 为完整一轮结果；`aggregate_rag_runs(runs: list[RagJudgeRun]) -> RagJudgeAggregate` 提供四维均值、范围和状态；`calculate_rag_base(rule: Decimal, quality: Decimal, faithfulness: Decimal, correctness: Decimal, completeness: Decimal) -> Decimal` 计算未舍入基础分。反馈使用 `scoreVersion` 和已保存 `baseFinal`，不重新 Judge。
 
-- [ ] 先写 3 轮稳定、1 轮失效仍成功、2 轮失效、任一维度范围超限、边界 2.0、缺字段、越界、伪造引用、无可评估项测试。
+- [x] 编写 3 轮稳定、1 轮失效仍成功、2 轮失效、任一维度范围超限、边界 2.0、缺字段、越界、伪造引用、无可评估项测试（未执行）。
 - [ ] 运行红色测试，实施联合 Judge prompt、严格解析和 Decimal 公式；保留各轮 usage 与无效原因。
 - [ ] 先写旧 chat 请求缺省、RAG 强制私有/强制 Judge、任务类型筛选与 NDJSON 合约测试，再正式接通 RAG 路由分派。
 - [ ] 验证实时结果、历史重读、点赞/取消点赞的分项与基础分一致；Judge 失败仍显示回答，反馈不使失败变有效。
 - [ ] 验证 owner/其他用户/admin 对任务、引用、下载、评论的完整权限矩阵及管理员互动明细过滤；普通公开任务回归不变。
 - [ ] 运行 RAG 及原有 evaluation/feedback/token 测试，更新文档、审查并提交。
+
+实施记录（2026-09-03）：阶段 5 代码已接入，联合评审/公式/用量、NDJSON 预检/分派、历史/反馈、SQL 私有过滤、55/60 分钟收尾与恢复均已编写；基础分固定为数据库 DECIMAL(18,10) 精度后再算显示分，评审期间的已有反馈也参与首次终态计算。保留普通 chat 分派，Vue 不改。自查并修正了流式用户信息捕获、异步生成器逐层关闭、模型解析的默认回退、评分误走 chat 公式等边界。
+
+验证状态：Docker 已关闭，尝试启动轻量测试容器时报告缺少 `dockerDesktopLinuxEngine`，测试未执行，未观察到本阶段红/绿结果。遵照老大资源不足优先开发的决定，不启动 Docker，不运行迁移、不调用真实模型；阶段 5 的单元/SQLite/API/并发/实际部署验收均延期。测试覆盖编写了公式、反馈/取消反馈及提前反馈、实时/历史一致、取消等待、超期恢复、隐私查询；仍须在充足设备运行原有和新增回归，不能用阶段 4 的 99 passed 代替本阶段结果。提交前只做代码/文档人工核对及 Git 差异检查。
 
 ```python
 def test_rag_formula_keeps_unrounded_base():
@@ -653,7 +663,7 @@ docker compose config --services
 docker compose run --rm --no-deps -e DATABASE_URL=mysql+aiomysql://test:test@invalid:3306/unit_test backend python -m pytest tests/test_rag_clients.py tests/test_rag_configuration.py -q
 docker compose run --rm --no-deps -e DATABASE_URL=mysql+aiomysql://test:test@invalid:3306/unit_test backend python -m pytest tests/test_knowledge_base_api.py tests/test_knowledge_base_service.py tests/test_rag_storage.py -q
 docker compose run --rm --no-deps -e DATABASE_URL=mysql+aiomysql://test:test@invalid:3306/unit_test backend python -m pytest tests/test_rag_documents.py tests/test_rag_indexing.py -q
-docker compose run --rm --no-deps -e DATABASE_URL=mysql+aiomysql://test:test@invalid:3306/unit_test backend python -m pytest tests/test_rag_evaluation.py tests/test_rag_usage.py tests/test_rag_judge.py tests/test_rag_evaluation_api.py tests/test_rag_history_access.py -q
+docker compose run --rm --no-deps -e DATABASE_URL=mysql+aiomysql://test:test@invalid:3306/unit_test backend python -m pytest tests/test_rag_evaluation.py tests/test_rag_usage.py tests/test_rag_judge.py tests/test_rag_evaluation_api.py tests/test_rag_scoring.py tests/test_rag_privacy.py tests/test_rag_service.py -q
 docker compose run --rm --no-deps -e DATABASE_URL=mysql+aiomysql://test:test@invalid:3306/unit_test backend python -m pytest tests/test_evaluation_api.py tests/test_evaluation_service.py tests/test_feedback_stats_api.py tests/test_feedback_stats_service.py tests/test_token_quota_service.py tests/test_token_usage_api.py -q
 docker compose run --rm --no-deps frontend pnpm test
 docker compose run --rm --no-deps frontend pnpm build
@@ -677,9 +687,9 @@ docker compose run --rm --no-deps frontend pnpm build
 | 依赖版本 | 镜像 digest、模型 SHA、包版本、兼容性结果 | 阶段 1 已验证，见第 10 节版本与实测记录 |
 | 数据升级 | 隔离库迁移前后结构、旧任务兼容、无历史改分 | 阶段 2 独立 MySQL 通过；业务库未迁移 |
 | 索引 | 四格式来源、块上限、重复/中断恢复、版本过滤 | 解析/真实 Qwen 分词、MySQL 故障与版本、真实 Qdrant、Worker 停启恢复通过；四格式真实模型全链路延期 |
-| 评测 | 两候选不同查询与证据、Top-5、失败隔离、流式事件 | 未执行 |
+| 评测 | 两候选不同查询与证据、Top-5、失败隔离、流式事件 | 阶段 4 假客户端及 SQLite 定向测试通过；阶段 5 接入后的全链路用例未执行 |
 | Judge | 有效轮数/范围边界、引用语义判定、公式样例、反馈重算 | 未执行 |
-| 权限 | 所有者/其他用户/管理员的内容与互动访问矩阵 | 知识库/文档 API 权限矩阵通过；RAG 评测及互动待阶段 5 |
+| 权限 | 所有者/其他用户/管理员的内容与互动访问矩阵 | 知识库/文档 API 权限矩阵通过；阶段 5 RAG 评测与互动用例已编写、未执行 |
 | 删除 | 当前文件/文本/向量清理，历史快照保留且不可越权 | 删除墓碑/幂等、立即禁下载、真实 Qdrant 清理与 Worker 过期租约物理清理通过；完整索引后删除延期，历史快照待阶段 4—5 |
 | 前端 | Vitest、TypeScript/Vite 构建、浏览器关键路径 | 未执行 |
 | 实际部署 | Docker 实连、普通评测降级隔离、模型调用结果 | 基础依赖实连、CPU Embedding、Worker、断网 health 通过；完整 RAG 未执行 |

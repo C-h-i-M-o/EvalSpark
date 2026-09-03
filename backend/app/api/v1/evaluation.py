@@ -1,5 +1,7 @@
 import json
 from collections.abc import AsyncIterator
+from contextlib import aclosing
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi import Depends
@@ -28,6 +30,7 @@ from app.services.evaluation_service import (
     evaluation_service,
 )
 from app.services.token_quota_service import TokenQuotaExceededError, token_quota_service
+from app.services.rag.service import rag_evaluation_service
 
 router = APIRouter()
 
@@ -53,22 +56,29 @@ async def stream_evaluation_task(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
+    rag_run = None
+    user_id, username = current_user.id, current_user.username
     try:
         await token_quota_service.ensure_can_start(db, current_user)
         await evaluation_service.validate_task_models(payload, db)
+        if payload.task_type == "rag":
+            rag_run = await rag_evaluation_service.start(payload, db, user_id)
     except TokenQuotaExceededError as error:
         raise HTTPException(status_code=429, detail=str(error)) from error
     except EvaluationTaskValidationError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
     async def render_events() -> AsyncIterator[str]:
-        async for event in evaluation_service.stream_task_events(
+        events = evaluation_service.stream_task_events(
             payload,
             db,
-            current_user.id,
-            current_user.username,
-        ):
-            yield json.dumps(jsonable_encoder(event), ensure_ascii=False) + "\n"
+            user_id,
+            username,
+            **({"rag_run": rag_run} if rag_run is not None else {}),
+        )
+        async with aclosing(events):
+            async for event in events:
+                yield json.dumps(jsonable_encoder(event), ensure_ascii=False) + "\n"
 
     return StreamingResponse(render_events(), media_type="application/x-ndjson")
 
@@ -77,9 +87,12 @@ async def stream_evaluation_task(
 async def list_evaluation_tasks(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=100, alias="pageSize"),
+    task_type: Literal["chat", "rag"] | None = Query(default=None, alias="taskType"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> EvaluationTaskListRead:
+    if task_type is not None:
+        return await evaluation_service.list_tasks(db, page, page_size, current_user.id, task_type=task_type)
     return await evaluation_service.list_tasks(db, page, page_size, current_user.id)
 
 

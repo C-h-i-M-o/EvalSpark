@@ -2,10 +2,12 @@ from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+from app.schemas.rag import RagDetailRead
 
 
 class EvaluationTaskCreate(BaseModel):
-    task_type: Literal["chat"] = Field(default="chat", alias="taskType")
+    task_type: Literal["chat", "rag"] = Field(default="chat", alias="taskType")
+    knowledge_base_id: int | None = Field(default=None, alias="knowledgeBaseId", gt=0, strict=True)
     conversation_id: int | None = Field(default=None, alias="conversationId")
     prompt: str
     model_ids: list[int] = Field(default_factory=list, alias="modelIds")
@@ -16,6 +18,12 @@ class EvaluationTaskCreate(BaseModel):
 
     @model_validator(mode="after")
     def require_judge_model(self) -> "EvaluationTaskCreate":
+        if self.task_type == "rag":
+            if not self.knowledge_base_id or not self.enable_judge or self.judge_model_id is None:
+                raise ValueError("RAG 评测必须选择知识库并启用空闲评审模型")
+            if not self.prompt.strip() or not self.model_ids or len(set(self.model_ids)) != len(self.model_ids):
+                raise ValueError("RAG 评测需要非空问题及不重复的候选模型")
+            self.visibility = "private"
         if self.enable_judge and self.judge_model_id in self.model_ids:
             raise ValueError("LLM 评审模型不能同时作为被测模型")
         return self
@@ -34,6 +42,7 @@ class JudgeRunRead(BaseModel):
 
 
 class EvaluationScoreRead(BaseModel):
+    score_version: Literal["chat-v1", "rag-v1"] = Field(default="chat-v1", alias="scoreVersion")
     relevance: float
     completeness: float
     clarity: float
@@ -55,6 +64,8 @@ class EvaluationScoreRead(BaseModel):
 
     @model_validator(mode="after")
     def default_rule_final(self) -> "EvaluationScoreRead":
+        if self.score_version == "rag-v1":
+            return self
         if self.rule_final is None:
             self.rule_final = self.final
         if self.base_final is None:
@@ -82,6 +93,7 @@ class ModelCostDetailsRead(BaseModel):
 
 
 class ModelResponseRead(BaseModel):
+    rag: RagDetailRead | None = None
     id: int
     model_config_id: int | None = Field(default=None, alias="modelConfigId")
     model_name: str = Field(alias="modelName")
@@ -103,6 +115,7 @@ class ModelResponseRead(BaseModel):
 
 
 class EvaluationTaskRead(BaseModel):
+    task_type: Literal["chat", "rag"] = Field(default="chat", alias="taskType")
     task_id: int = Field(alias="taskId")
     status: str
     prompt: str
@@ -115,6 +128,7 @@ class EvaluationTaskRead(BaseModel):
 
 
 class EvaluationTaskListItemRead(BaseModel):
+    task_type: Literal["chat", "rag"] = Field(default="chat", alias="taskType")
     task_id: int = Field(alias="taskId")
     status: str
     prompt: str

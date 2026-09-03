@@ -1,5 +1,5 @@
 from decimal import Decimal
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -8,16 +8,41 @@ from app.core.config import settings
 from app.db.session import AsyncSessionLocal
 from app.adapters.base import ModelUsage
 from app.models.evaluation import EvaluationResult, EvaluationTask
+from app.models.feedback import UserFeedback
+from app.models.conversation import Conversation
 from app.models.knowledge_base import KnowledgeBase, KnowledgeChunk, KnowledgeDocument
 from app.models.rag import RagResponseDetail
 from app.models.response import ModelResponse
-from app.schemas.rag import PreparedRagResponse, RagEvidence, RagStageUsage, RagTaskContext
+from app.schemas.rag import PreparedRagResponse, RagEvidence, RagJudgeRun, RagStageUsage, RagTaskContext
+from app.schemas.evaluation import EvaluationScoreRead
 from app.services.knowledge_base_service import require_owned_knowledge_base
 from app.services.model_config_service import RuntimeModelConfig
 from app.services.rag.clients import RagClientError, VectorMatch
 from app.services.rag.errors import KnowledgeBaseError
 from app.services.rag.usage import estimate_stage_cost, model_snapshot
 from app.services.token_quota_service import token_quota_service
+from app.services.rag.judge import aggregate_rag_runs, apply_rag_feedback, calculate_rag_base, calculate_rag_final
+from app.services.rule_evaluator import rule_evaluator
+
+RAG_EXECUTION_TIMEOUT_SECONDS = 55 * 60
+RAG_STALE_SECONDS = 60 * 60
+
+
+def _replace_stage(detail: RagResponseDetail, usage: RagStageUsage, *, start: bool = False) -> None:
+    stages = [RagStageUsage.model_validate(item) for item in detail.stage_usage_json]
+    key = (usage.stage, usage.run_index)
+    index = next((index for index, item in enumerate(stages) if (item.stage, item.run_index) == key), None)
+    if start and index is not None:
+        raise RagClientError("rag_stage_already_started", "此阶段已开始，不能重复调用")
+    if index is None:
+        if not start:
+            raise RagClientError("rag_stage_not_started", "阶段尚未开始，不能保存用量")
+        stages.append(usage)
+    else:
+        if stages[index].status != "pending" and stages[index] != usage:
+            raise RagClientError("rag_usage_already_saved", "阶段用量已保存，不能覆盖")
+        stages[index] = usage
+    detail.stage_usage_json = [item.model_dump(mode="json", by_alias=True) for item in stages]
 
 
 class RagEvaluationStore:
@@ -31,6 +56,9 @@ class RagEvaluationStore:
         if not models or len({model.id for model in models}) != len(models):
             raise RagClientError("rag_invalid_models", "请选择不重复的候选模型")
         async with self.sessions() as db, db.begin():
+            if conversation_id is not None and await db.scalar(select(Conversation.id).where(
+                Conversation.id == conversation_id, Conversation.user_id == user_id)) is None:
+                raise KnowledgeBaseError("conversation_not_found", "会话不存在或无权访问", 404)
             kb = await require_owned_knowledge_base(db, knowledge_base_id, user_id, lock=True)
             versions = await self._versions(db, user_id, kb.id)
             if kb.status != "ready" or not versions:
@@ -63,11 +91,15 @@ class RagEvaluationStore:
         return [(row[0], row[1]) for row in rows.all()]
 
     async def _owned_response(self, db: AsyncSession, context: RagTaskContext,
-                              response_id: int) -> tuple[ModelResponse, RagResponseDetail]:
+                              response_id: int, *, allow_expired: bool = False) -> tuple[ModelResponse, RagResponseDetail]:
         task = await db.scalar(select(EvaluationTask).where(EvaluationTask.id == context.task_id,
-            EvaluationTask.user_id == context.user_id, EvaluationTask.task_type == "rag", EvaluationTask.visibility == "private"))
+            EvaluationTask.user_id == context.user_id, EvaluationTask.task_type == "rag", EvaluationTask.visibility == "private")
+            .with_for_update().execution_options(populate_existing=True))
         if task is None:
             raise RagClientError("rag_response_not_found", "评测回答不存在或无权访问")
+        if not allow_expired and (task.status != "pending" or
+            task.created_at < datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=RAG_STALE_SECONDS)):
+            raise RagClientError("rag_task_finished", "任务已结束或超过有效期，不能继续写入")
         response = await db.scalar(select(ModelResponse).where(ModelResponse.id == response_id,
             ModelResponse.task_id == context.task_id).with_for_update().execution_options(populate_existing=True))
         detail = await db.scalar(select(RagResponseDetail).where(RagResponseDetail.response_id == response_id,
@@ -83,22 +115,9 @@ class RagEvaluationStore:
             response, detail = await self._owned_response(db, context, response_id)
             if response.status in ("success", "failed"):
                 raise RagClientError("rag_response_finished", "已结束的回答不能再次调用模型")
-            stages = [RagStageUsage.model_validate(item) for item in detail.stage_usage_json]
-            key = (usage.stage, usage.run_index)
-            index = next((index for index, item in enumerate(stages) if (item.stage, item.run_index) == key), None)
-            if start and index is not None:
-                raise RagClientError("rag_stage_already_started", "此阶段已开始，不能重复调用")
             if usage.stage in ("generate", "judge") and (not detail.evidence_json or detail.failure_stage is not None):
                 raise RagClientError("rag_snapshot_missing", "缺少已固定的检索证据")
-            if index is None:
-                if not start:
-                    raise RagClientError("rag_stage_not_started", "阶段尚未开始，不能保存用量")
-                stages.append(usage)
-            else:
-                if stages[index].status != "pending" and stages[index] != usage:
-                    raise RagClientError("rag_usage_already_saved", "阶段用量已保存，不能覆盖")
-                stages[index] = usage
-            detail.stage_usage_json = [item.model_dump(mode="json", by_alias=True) for item in stages]
+            _replace_stage(detail, usage, start=start)
             if response.status == "pending":
                 response.status = "running"
 
@@ -178,7 +197,7 @@ class RagEvaluationStore:
                     response.input_cost, response.output_cost = costs.input_cost, costs.output_cost
                     response.cache_hit_cost, response.cache_creation_cost = costs.cache_hit_cost, costs.cache_creation_cost
 
-    async def interrupt(self, context: RagTaskContext) -> None:
+    async def interrupt(self, context: RagTaskContext, *, stale_before: datetime | None = None) -> None:
         """在调用方确认本任务已停止后收尾；仅记账，不重放任何模型请求。"""
         async with self.sessions() as db, db.begin():
             task = await db.scalar(select(EvaluationTask).where(EvaluationTask.id == context.task_id,
@@ -188,11 +207,13 @@ class RagEvaluationStore:
                 raise RagClientError("rag_task_not_found", "评测任务不存在或无权访问")
             if task.status in ("completed", "failed"):
                 return
+            if stale_before is not None and task.created_at >= stale_before:
+                return
             response_ids = list((await db.scalars(select(ModelResponse.id).where(
                 ModelResponse.task_id == context.task_id).order_by(ModelResponse.id))).all())
             has_success = False
             for response_id in response_ids:
-                response, detail = await self._owned_response(db, context, response_id)
+                response, detail = await self._owned_response(db, context, response_id, allow_expired=True)
                 if response.status == "success":
                     has_success = True
                     continue
@@ -212,4 +233,92 @@ class RagEvaluationStore:
                         score_status="judge_failed" if detail.failure_stage == "judge" else "model_failed"))
                 await token_quota_service.record_rag_usage(db, response_id=response_id, user_id=context.user_id)
             task.status = "completed" if has_success else "failed"
+            task.completed_at = datetime.now(UTC).replace(tzinfo=None)
+
+    async def recover_interrupted(self, *, limit: int = 100) -> None:
+        # 仅关闭超过全链路时限及收尾宽限的任务，不重放付费请求。
+        cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=RAG_STALE_SECONDS)
+        async with self.sessions() as db:
+            tasks = list((await db.scalars(select(EvaluationTask).where(
+                EvaluationTask.task_type == "rag", EvaluationTask.visibility == "private",
+                EvaluationTask.status == "pending", EvaluationTask.created_at < cutoff,
+            ).order_by(EvaluationTask.id).limit(limit))).all())
+            contexts: list[RagTaskContext] = []
+            for task in tasks:
+                detail = await db.scalar(select(RagResponseDetail).join(ModelResponse,
+                    ModelResponse.id == RagResponseDetail.response_id).where(ModelResponse.task_id == task.id)
+                    .order_by(ModelResponse.id).limit(1))
+                if detail is not None:
+                    contexts.append(RagTaskContext(task_id=task.id, user_id=task.user_id,
+                        knowledge_base_id=detail.knowledge_base_id, content_revision=detail.content_revision,
+                        document_versions=[(item["documentId"], item["indexRevision"]) for item in detail.document_versions_json],
+                        prompt=task.prompt, enable_thinking=False))
+        for context in contexts:
+            await self.interrupt(context, stale_before=cutoff)
+
+    async def save_judge_run(self, context: RagTaskContext, response_id: int,
+                             run: RagJudgeRun, usage: RagStageUsage) -> None:
+        async with self.sessions() as db, db.begin():
+            response, detail = await self._owned_response(db, context, response_id)
+            if response.status != "answer_completed" or run.run_index != usage.run_index or usage.stage != "judge":
+                raise RagClientError("rag_invalid_judge_state", "回答或评审轮次状态无效")
+            if any(value["runIndex"] == run.run_index for value in detail.judge_runs_json):
+                raise RagClientError("rag_judge_already_saved", "此轮评审已保存，不能覆盖")
+            _replace_stage(detail, usage)
+            detail.judge_runs_json = [*detail.judge_runs_json, run.model_dump(mode="json", by_alias=True)]
+
+    async def saved_answer(self, context: RagTaskContext, response_id: int) -> str:
+        async with self.sessions() as db, db.begin():
+            response, _ = await self._owned_response(db, context, response_id)
+            return response.answer_text
+
+    async def finalize_response(self, context: RagTaskContext, response_id: int) -> None:
+        async with self.sessions() as db, db.begin():
+            response, detail = await self._owned_response(db, context, response_id)
+            if await db.scalar(select(EvaluationResult.id).where(EvaluationResult.response_id == response_id)) is not None:
+                return
+            rule = EvaluationScoreRead(**rule_evaluator.evaluate(prompt=context.prompt, answer=response.answer_text))
+            status = "model_failed"
+            quality = None
+            ranges = None
+            if detail.failure_stage is None:
+                aggregate = aggregate_rag_runs([RagJudgeRun.model_validate(value) for value in detail.judge_runs_json])
+                status = aggregate.score_status
+                detail.faithfulness = aggregate.faithfulness
+                detail.citation_correctness = aggregate.citation_correctness
+                detail.citation_completeness = aggregate.citation_completeness
+                ranges = max(aggregate.ranges.values()) if aggregate.ranges else None
+                if status == "scored":
+                    quality = aggregate.answer_quality
+                    assert quality is not None and aggregate.faithfulness is not None
+                    assert aggregate.citation_correctness is not None and aggregate.citation_completeness is not None
+                    detail.rag_final = calculate_rag_final(aggregate.faithfulness, aggregate.citation_correctness, aggregate.citation_completeness)
+                    detail.base_final = calculate_rag_base(Decimal(str(rule.rule_final)), quality,
+                        aggregate.faithfulness, aggregate.citation_correctness, aggregate.citation_completeness).quantize(Decimal("0.0000000001"))
+                else:
+                    detail.failure_stage, detail.error_code = "judge", f"rag_{status}"
+            response.status = "failed" if status == "model_failed" else "success"
+            # 允许历史页在评审期间提交反馈；终态必须使用当前反馈，不能重置为零票。
+            feedback = list((await db.scalars(select(UserFeedback.feedback_type).where(
+                UserFeedback.response_id == response_id))).all())
+            db.add(EvaluationResult(response_id=response_id,
+                relevance_score=Decimal(str(rule.relevance)), completeness_score=Decimal(str(rule.completeness)),
+                clarity_score=Decimal(str(rule.clarity)), format_score=Decimal(str(rule.format)), safety_score=Decimal(str(rule.safety)),
+                rule_score=Decimal(str(rule.rule_final)), judge_score=quality,
+                final_score=apply_rag_feedback(detail.base_final, feedback.count("like"), feedback.count("dislike"))
+                    if status == "scored" and detail.base_final is not None else None,
+                score_status=status, excluded_from_stats=status != "scored", judge_score_range=ranges,
+                rule_dictionary_version=rule.rule_dictionary_version, judge_prompt_version="rag-v1"))
+            await token_quota_service.record_rag_usage(db, response_id=response_id, user_id=context.user_id)
+
+    async def finish_task(self, context: RagTaskContext) -> None:
+        async with self.sessions() as db, db.begin():
+            task = await db.scalar(select(EvaluationTask).where(EvaluationTask.id == context.task_id,
+                EvaluationTask.user_id == context.user_id, EvaluationTask.task_type == "rag").with_for_update())
+            if task is None or task.status != "pending":
+                return
+            statuses = list((await db.scalars(select(ModelResponse.status).where(ModelResponse.task_id == context.task_id))).all())
+            if any(value not in ("success", "failed") for value in statuses):
+                raise RagClientError("rag_task_incomplete", "仍有回答未完成持久化")
+            task.status = "completed" if "success" in statuses else "failed"
             task.completed_at = datetime.now(UTC).replace(tzinfo=None)

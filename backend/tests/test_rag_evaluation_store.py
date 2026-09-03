@@ -57,6 +57,18 @@ class AsyncTestSession:
     async def flush(self) -> None:
         self.session.flush()
 
+    async def rollback(self) -> None:
+        self.session.rollback()
+
+    async def commit(self) -> None:
+        self.session.commit()
+
+    async def delete(self, value) -> None:
+        self.session.delete(value)
+
+    async def refresh(self, value) -> None:
+        self.session.refresh(value)
+
 
 @pytest_asyncio.fixture
 async def stored():

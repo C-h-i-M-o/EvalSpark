@@ -31,6 +31,9 @@ async def recover_once() -> None:
     # Celery 每次使用独立事件循环，连接池不能跨循环或跨 fork 复用。
     engine = create_async_engine(settings.database_url, pool_pre_ping=True)
     try:
-        await recover_jobs(async_sessionmaker(engine, expire_on_commit=False), publish_rag_job)
+        from app.services.rag.evaluation_store import RagEvaluationStore
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        await recover_jobs(sessions, publish_rag_job)
+        await RagEvaluationStore(sessions).recover_interrupted()
     finally:
         await engine.dispose()

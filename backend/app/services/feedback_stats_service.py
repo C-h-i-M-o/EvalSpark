@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.comment import UserComment
@@ -155,14 +155,19 @@ class FeedbackStatsService:
         model_config_id: int | None,
         page: int,
         page_size: int,
+        *,
+        user_id: int,
     ) -> AdminFeedbackStatsRead:
         window = self.resolve_range(range_name)
         responses = await self._load_responses(db, window)
-        feedback = await self._load_feedback(db, window)
-        comments = await self._load_comments(db, window)
+        # 全局统计仅取无正文记录；互动明细另用 SQL 过滤其他人的私有 RAG。
+        feedback = await self._load_feedback(db, window, aggregate_only=True)
+        comments = await self._load_comments(db, window, aggregate_only=True)
         dashboard = self.build_dashboard(responses, feedback, comments)
+        visible_feedback = await self._load_feedback(db, window, viewer_id=user_id)
+        visible_comments = await self._load_comments(db, window, viewer_id=user_id)
         activities = self.filter_activities(
-            [*feedback, *comments],
+            [*visible_feedback, *visible_comments],
             activity_type=activity_type,
             model_config_id=model_config_id,
             page=page,
@@ -338,13 +343,19 @@ class FeedbackStatsService:
         *,
         target_owner_id: int | None = None,
         actor_user_id: int | None = None,
+        aggregate_only: bool = False,
+        viewer_id: int | None = None,
     ) -> list[InteractionRecord]:
-        statement = self._interaction_statement(UserFeedback.id, UserFeedback.feedback_type, UserFeedback.created_at)
+        statement = self._interaction_statement(UserFeedback.id, UserFeedback.feedback_type, UserFeedback.created_at,
+            aggregate_only=aggregate_only)
         statement = self._apply_time_window(statement, UserFeedback.created_at, window)
         if target_owner_id is not None:
             statement = statement.where(EvaluationTask.user_id == target_owner_id)
         if actor_user_id is not None:
-            statement = statement.where(UserFeedback.user_id == actor_user_id)
+            statement = statement.where(UserFeedback.user_id == actor_user_id,
+                or_(EvaluationTask.task_type == "chat", EvaluationTask.user_id == actor_user_id))
+        if viewer_id is not None:
+            statement = statement.where(or_(EvaluationTask.task_type == "chat", EvaluationTask.user_id == viewer_id))
         rows = await db.execute(statement)
         return [self._interaction_record(row, content=None) for row in rows.all()]
 
@@ -355,6 +366,8 @@ class FeedbackStatsService:
         *,
         target_owner_id: int | None = None,
         actor_user_id: int | None = None,
+        aggregate_only: bool = False,
+        viewer_id: int | None = None,
     ) -> list[InteractionRecord]:
         statement = self._interaction_statement(
             UserComment.id,
@@ -363,12 +376,16 @@ class FeedbackStatsService:
             content_column=UserComment.content,
             user_id_column=UserComment.user_id,
             response_id_column=UserComment.response_id,
+            aggregate_only=aggregate_only,
         )
         statement = self._apply_time_window(statement, UserComment.created_at, window)
         if target_owner_id is not None:
             statement = statement.where(EvaluationTask.user_id == target_owner_id)
         if actor_user_id is not None:
-            statement = statement.where(UserComment.user_id == actor_user_id)
+            statement = statement.where(UserComment.user_id == actor_user_id,
+                or_(EvaluationTask.task_type == "chat", EvaluationTask.user_id == actor_user_id))
+        if viewer_id is not None:
+            statement = statement.where(or_(EvaluationTask.task_type == "chat", EvaluationTask.user_id == viewer_id))
         rows = await db.execute(statement)
         return [self._interaction_record(row, content=row[-1], force_type="comment") for row in rows.all()]
 
@@ -381,6 +398,7 @@ class FeedbackStatsService:
         content_column: object | None = None,
         user_id_column: object = UserFeedback.user_id,
         response_id_column: object = UserFeedback.response_id,
+        aggregate_only: bool = False,
     ) -> object:
         columns = [
             activity_id_column,
@@ -392,11 +410,11 @@ class FeedbackStatsService:
             ModelResponse.model_config_id,
             ModelConfig.display_name,
             ModelResponse.config_snapshot,
-            EvaluationTask.prompt,
+            literal("") if aggregate_only else EvaluationTask.prompt,
             created_at_column,
         ]
         if content_column is not None:
-            columns.append(content_column)
+            columns.append(literal(None) if aggregate_only else content_column)
         return (
             select(*columns)
             .select_from(UserFeedback if activity_type_column is not None else UserComment)

@@ -2,7 +2,29 @@
 
 ## V3 私有知识库管理（阶段 2）
 
-以下接口已接入后端，部署前需要应用 `20260902_01/02` 迁移。阶段 3 已注册异步作业，通知成功后不再固定为 `dispatchPending=true`；是否处理完成必须读取作业状态。四格式解析、索引与物理删除代码已实现，真实模型全链路按用户资源受限决定延期。阶段 4 内部逐模型检索、证据快照及阶段用量已实现，但评分尚未接通；`taskType=rag` 仍返回 422，React 暂无知识库入口，不对外发送内部 `rag_answer_ready` 事件。
+以下接口已接入后端，部署前需要应用 `20260902_01/02` 迁移。阶段 3 已注册异步作业，通知成功后不再固定为 `dispatchPending=true`；是否处理完成必须读取作业状态。阶段 5 已接入 RAG 检索回答、证据快照、联合评分及任务 API；本阶段新增测试和真实模型全链路按用户资源受限决定延期，React 暂无知识库入口。不对外发送内部 `rag_answer_ready` 事件。
+
+### V3 RAG 任务接口（阶段 5，运行验收待执行）
+
+复用 `POST /api/evaluation/tasks` 与 `/tasks/stream`。旧请求默认 `taskType=chat`，原公式不变。RAG 请求示例：
+
+```json
+{"taskType":"rag","knowledgeBaseId":1,"prompt":"报销需要哪些材料？","modelIds":[1,2],"judgeModelId":3,"enableJudge":true,"enableThinking":false,"visibility":"private"}
+```
+
+RAG 必须选择本人 ready 且存在已索引文档的知识库、非空且不重复的可用候选模型、一个未参与回答的可用 Judge；必须启用 Judge，服务端强制 private。可选 conversationId 只能指向本人会话。流式响应头发出前检查额度、配置和知识库，鉴权失败/不可用库返回正常 HTTP 错误，不伪装成成功 NDJSON。
+
+事件为：`task_started`（新增 taskType）、逐候选 `rag_stage`（rewriting/retrieving/answering/judging）、`rag_retrieval`（modelConfigId、rewrittenQuery、当前回答的 evidence）、原 `model_delta`、`model_answer_completed`、评分及落库后的 `model_response`、最后 `task_completed`。断开会取消并等待子协程退出后收尾；进程异常时由 Worker 关闭超过 60 分钟的任务，不重放模型。运行中已知用量可能尚未记入当日额度，整条链路终态单次入账。
+
+任务详情/列表新增 `taskType`；`GET /api/evaluation/tasks?taskType=rag` 按类型筛选，不传则保留混合分页。RAG 只有所有者可读/反馈/评论，管理员没有内容读取豁免，异常 public 字段也不会公开。管理员全局统计可包含无正文 RAG 汇总，互动明细排除他人的 RAG。
+
+每个 RAG 回答新增 `rag` 明细（chat 为 null）：知识库 ID/名称、contentRevision、embeddingRevision、chunkSize/chunkOverlap、documentVersions、rewrittenQuery、evidence、stageUsage、externalTotalTokens、costByCurrency、hasUnknownUsage、judgeRuns、judgeAggregate、faithfulness/citationCorrectness/citationCompleteness、ragFinal/baseFinal、scoreVersion、failureStage/errorCode。证据含 label、documentId/documentName、chunkId/indexRevision、text、similarity、source，来自固定快照；S1 只属于当前回答，不能跨模型共用。
+
+每轮 Judge 含 runIndex、promptCode、result、rawResult、errorCode；result 包含四维分及逐断言 claims。judgeAggregate 包含 validRunCount、四维均值、scoreStatus 与 ranges（键为 answer_quality/faithfulness/citation_correctness/citation_completeness）。至少两轮完整有效且四维极差均 ≤2 才出分；失败/不稳定保留回答及已得维度，final/baseFinal 为空并排除统计。`score.scoreVersion=rag-v1`，展示兼容旧 score 字段，但不得套用 chat 公式。rawResult 仅保存已解析 JSON，不保存无法解析的响应原文或异常摘要。
+
+RAGFinal=0.50×忠实度+0.30×引用正确性+0.20×引用完整性；BaseFinal=0.20×规则分+0.30×回答质量+0.50×RAGFinal；有反馈时 Final=0.90×BaseFinal+0.10×反馈分。仅最终展示分四舍五入到两位，反馈重算使用已保存基础分，不再调用 Judge。rag 中的 Decimal 分数/费用以 JSON 字符串传输，顶层兼容 score 仍为 number。
+
+stageUsage 逐 rewrite/embed/generate/judge 记录 runIndex、status（pending/known/unknown）、安全 model 配置快照和 Token/耗时/费用。Embedding 不计入外部费用/额度。hasUnknownUsage=true 时 externalTotalTokens/costByCurrency 只是已知小计，不能显示为精确总量；顶层费用和 Token 仍只代表回答生成阶段。不同币种不得直接相加。
 
 所有接口要求登录，只能操作自己的库和文档，管理员也不能读取他人私有内容。未登录 401、账号禁用 403、他人或不存在资源统一 404。领域错误结构为 `{"detail":{"code":"document_limit","message":"每个知识库最多保留 100 份未清理文档"}}`；请求字段错误仍使用 FastAPI 标准 422。分页为 `page=1&pageSize=20`，每页上限 100。
 

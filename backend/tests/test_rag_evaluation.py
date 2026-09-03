@@ -214,7 +214,7 @@ async def test_stage_replay_does_not_repeat_paid_rewrite(setup) -> None:
     assert all(len(client.requests) == 1 for client in clients.values())
 
 
-def test_rag_internal_chain_is_not_a_public_unscored_task() -> None:
+def test_rag_request_without_knowledge_base_is_rejected() -> None:
     from pydantic import ValidationError
     from app.schemas.evaluation import EvaluationTaskCreate
     with pytest.raises(ValidationError):

@@ -1,7 +1,7 @@
 from decimal import Decimal
 from typing import Annotated, Literal
 
-from pydantic import Field, StrictInt, model_validator
+from pydantic import BeforeValidator, Field, JsonValue, StrictBool, StrictInt, model_validator
 
 from app.schemas.knowledge_base import KnowledgeSchema, SourceLocation
 
@@ -130,3 +130,75 @@ RagStreamEvent = Annotated[
     RagStageEvent | RagRetrievalEvent | RagDeltaEvent | RagAnswerCompletedEvent | RagAnswerReadyEvent,
     Field(discriminator="type"),
 ]
+
+
+def _judge_number(value: object) -> Decimal:
+    # 数据库 JSON 中 Decimal 按字符串保存；上游原始输入的数字类型在解析入口另行校验。
+    if type(value) not in (int, float, Decimal, str):
+        raise ValueError("评审分数必须是数字")
+    return Decimal(str(value))
+
+
+JudgeDimension = Annotated[Decimal, BeforeValidator(_judge_number), Field(ge=0, le=10, allow_inf_nan=False)]
+
+
+class RagClaim(KnowledgeSchema):
+    claim: str = Field(min_length=1)
+    evidence_labels: list[str]
+    invalid_citation_labels: list[str]
+    supported: StrictBool
+    needs_citation: StrictBool
+    citation_supported: StrictBool
+    reason: str = Field(min_length=1)
+
+
+class RagJudgeResult(KnowledgeSchema):
+    answer_quality: JudgeDimension
+    faithfulness: JudgeDimension
+    citation_correctness: JudgeDimension
+    citation_completeness: JudgeDimension
+    claims: list[RagClaim] = Field(min_length=1)
+
+
+class RagJudgeRun(KnowledgeSchema):
+    run_index: StrictInt = Field(ge=1, le=3)
+    prompt_code: str
+    result: RagJudgeResult | None = None
+    raw_result: dict[str, JsonValue] | None = None
+    error_code: str | None = None
+
+
+class RagJudgeAggregate(KnowledgeSchema):
+    score_status: Literal["scored", "judge_failed", "judge_unstable"]
+    valid_run_count: StrictInt
+    answer_quality: Decimal | None = None
+    faithfulness: Decimal | None = None
+    citation_correctness: Decimal | None = None
+    citation_completeness: Decimal | None = None
+    ranges: dict[str, Decimal] = Field(default_factory=dict)
+
+
+class RagDetailRead(KnowledgeSchema):
+    knowledge_base_id: int
+    knowledge_base_name: str
+    content_revision: int
+    embedding_revision: str
+    chunk_size: int
+    chunk_overlap: int
+    document_versions: list[dict[str, int]]
+    rewritten_query: str | None = None
+    evidence: list[RagEvidence]
+    stage_usage: list[RagStageUsage]
+    external_total_tokens: int
+    cost_by_currency: dict[str, Decimal]
+    has_unknown_usage: bool
+    judge_runs: list[RagJudgeRun]
+    judge_aggregate: RagJudgeAggregate | None = None
+    faithfulness: Decimal | None = None
+    citation_correctness: Decimal | None = None
+    citation_completeness: Decimal | None = None
+    rag_final: Decimal | None = None
+    base_final: Decimal | None = None
+    score_version: Literal["rag-v1"] = "rag-v1"
+    failure_stage: RagFailureStage | None = None
+    error_code: str | None = None

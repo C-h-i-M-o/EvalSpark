@@ -6,7 +6,7 @@
 
 | 表/字段 | 作用及约束 |
 | --- | --- |
-| `evaluation_tasks.task_type` | 非空 VARCHAR(16)，默认 `chat`；保留旧问题、回答、归属、可见性和原始得分。阶段 2 不接受 `rag` 创建请求 |
+| `evaluation_tasks.task_type` | 非空 VARCHAR(16)，默认 `chat`；保留旧问题、回答、归属、可见性和原始得分。阶段 5 接通 `rag` 创建请求 |
 | `knowledge_bases` | 用户归属、名称/说明、切分配置、状态、内容版本、安全错误码和时间；用户/状态索引 |
 | `knowledge_documents` | 库/用户外键、展示原名、唯一随机存储键、类型、字节数、SHA-256、状态、索引版本、块数及时间；库/状态索引 |
 | `knowledge_chunks` | UUID 块 ID、文档/库/用户外键、索引版本、块序号、原文、Token 数和 `source_json`；文档/版本/块序号唯一；归属版本索引 |
@@ -37,7 +37,11 @@
 
 `stage_usage_json` 按 `(stage,runIndex)` 唯一，stage 为 rewrite/embed/generate/judge；模型快照仅包含展示名、模型名、参数、单价和币种，不存凭据/地址/备注。status 为 pending/known/unknown；未知 Token 和费用为 null，汇总返回已知外部 Token 小计与 `hasUnknownUsage`，费用分币种保存。回答顶层用量/费用仍只代表生成阶段。
 
-阶段占位与更新先锁 `model_responses`，随后 current read 锁读明细，避免 REPEATABLE READ 旧快照覆盖最新阶段状态。终态与 `record_rag_usage` 同事务，锁下检查唯一 `token_usage_logs.response_id`，复用原每日累加路径；重复提交不二次累计。已确认中断的任务仅将 pending 置 unknown、保留片段和已知用量并结束，不自动重试模型。阶段 5 负责接入终态评分、API 与运行中断收尾。
+阶段 5 起，阶段占位与更新先锁 `evaluation_tasks`，再锁 `model_responses` 与明细，均使用 current read，避免 REPEATABLE READ 旧快照覆盖最新状态。终态评分与 `record_rag_usage` 同事务，锁下检查唯一 `token_usage_logs.response_id`，复用原每日累加路径；重复提交不二次累计。已确认中断的任务仅将 pending 置 unknown、保留片段和已知用量并结束，不自动重试模型。
+
+阶段 5 不新增 DDL。每轮 Judge 的结构化原始结果、有效结果/安全错误码和该轮用量在同一短事务保存；三轮完整后聚合并写 `rag_response_details` 的高精度分项、基础分及 `evaluation_results` 的终态。失败/不稳定没有最终分，反馈从 rag-v1 的保存基础分重算。RAG 不覆盖任何旧 chat 得分。
+
+任务执行最多 55 分钟，现有 Worker 每分钟恢复入口只关闭创建超过 60 分钟的 pending/private/rag 任务；锁内重新检查状态和截止时间，已结束或过期任务拒绝新的阶段写入。恢复不依赖当前知识库是否仍存在、不重放外部请求，只有持久化已知用量可以补记。新增 SQL/恢复/反馈测试尚未在当前关闭的 Docker 环境执行。
 
 SQLite 轻量测试覆盖 SQL 往返与回滚，但不能证明 MySQL 并发锁行为；`test_rag_usage_mysql.py` 保留显式隔离库开关用例，本机延期执行。业务库迁移门禁不变。
 

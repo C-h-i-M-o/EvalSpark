@@ -33,6 +33,7 @@ async def get_admin_feedback_stats(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100, alias="pageSize"),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
 ) -> AdminFeedbackStatsRead:
     return await feedback_stats_service.get_admin_stats(
         db,
@@ -41,4 +42,5 @@ async def get_admin_feedback_stats(
         model_config_id,
         page,
         page_size,
+        user_id=current_user.id,
     )

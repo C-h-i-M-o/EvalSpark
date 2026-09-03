@@ -1,11 +1,12 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 from datetime import datetime
 from decimal import Decimal
 
 import httpx
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -38,6 +39,9 @@ from app.services.llm_judge_evaluator import LLMJudgeResult, llm_judge_evaluator
 from app.services.model_config_service import RuntimeModelConfig, model_config_service
 from app.services.rule_evaluator import rule_evaluator
 from app.services.token_quota_service import token_quota_service
+from app.services.rag.service import RagRun, rag_evaluation_service
+from app.services.rag.scoring import serialize_rag_detail, serialize_rag_score
+from app.services.rag.judge import apply_rag_feedback
 
 
 BUILTIN_SYSTEM_PROMPT = """你是一个严谨、清晰、负责任的 AI 助手。请基于用户问题直接作答，并遵守以下要求：
@@ -84,6 +88,13 @@ class EvaluationService:
         user_id: int,
         username: str,
     ) -> EvaluationTaskRead:
+        if payload.task_type == "rag":
+            run = await rag_evaluation_service.start(payload, db, user_id)
+            async with aclosing(rag_evaluation_service.stream(run, self)) as events:
+                async for event in events:
+                    if event["type"] == "task_completed" and isinstance(event["task"], EvaluationTaskRead):
+                        return event["task"]
+            return await rag_evaluation_service.read_task(run, self)
         selected_models = await model_config_service.resolve_runtime_models(db, payload.model_ids)
         self._ensure_judge_model_is_idle(payload, selected_models)
         judge_model = await self._resolve_judge_model(db, payload)
@@ -117,7 +128,14 @@ class EvaluationService:
         db: AsyncSession,
         user_id: int,
         username: str,
+        rag_run: RagRun | None = None,
     ) -> AsyncIterator[dict[str, object]]:
+        if payload.task_type == "rag":
+            run = rag_run or await rag_evaluation_service.start(payload, db, user_id)
+            async with aclosing(rag_evaluation_service.stream(run, self)) as events:
+                async for event in events:
+                    yield event
+            return
         selected_models = await model_config_service.resolve_runtime_models(db, payload.model_ids)
         self._ensure_judge_model_is_idle(payload, selected_models)
         judge_model = await self._resolve_judge_model(db, payload)
@@ -128,6 +146,7 @@ class EvaluationService:
 
         yield {
             "type": "task_started",
+            "taskType": "chat",
             "taskId": task_id,
             "prompt": payload.prompt,
             "modelIds": model_ids,
@@ -223,6 +242,7 @@ class EvaluationService:
             .options(
                 selectinload(ModelResponse.task),
                 selectinload(ModelResponse.evaluation_result),
+                selectinload(ModelResponse.rag_detail),
             )
             .where(
                 ModelResponse.id == response_id,
@@ -232,6 +252,17 @@ class EvaluationService:
         response_record = response_result.scalar_one_or_none()
         if response_record is None:
             raise EvaluationResponseNotFoundError("模型回答不存在")
+
+        if getattr(response_record.task, "task_type", "chat") == "rag":
+            task_id = response_record.task_id
+            await db.rollback()
+            # 与评分写入保持“先任务、后回答”的锁顺序，防止反馈与终态更新互相覆盖。
+            await db.execute(select(EvaluationTask.id).where(EvaluationTask.id == task_id,
+                EvaluationTask.user_id == user_id).with_for_update())
+            response_record = (await db.execute(select(ModelResponse).where(ModelResponse.id == response_id)
+                .options(selectinload(ModelResponse.task), selectinload(ModelResponse.evaluation_result),
+                         selectinload(ModelResponse.rag_detail))
+                .with_for_update().execution_options(populate_existing=True))).scalar_one()
 
         feedback_result = await db.execute(
             select(UserFeedback)
@@ -335,9 +366,11 @@ class EvaluationService:
 
     async def delete_response_comment(self, comment_id: int, db: AsyncSession, user_id: int) -> None:
         result = await db.execute(
-            select(UserComment).where(
+            select(UserComment).join(ModelResponse, ModelResponse.id == UserComment.response_id)
+            .join(EvaluationTask, EvaluationTask.id == ModelResponse.task_id).where(
                 UserComment.id == comment_id,
                 UserComment.user_id == user_id,
+                or_(EvaluationTask.task_type == "chat", EvaluationTask.user_id == user_id),
             )
         )
         comment = result.scalar_one_or_none()
@@ -352,20 +385,25 @@ class EvaluationService:
         page: int,
         page_size: int,
         user_id: int,
+        task_type: str | None = None,
     ) -> EvaluationTaskListRead:
         normalized_page = max(page, 1)
         normalized_page_size = min(max(page_size, 1), 100)
         offset = (normalized_page - 1) * normalized_page_size
 
+        filters = [self._task_access_condition(user_id)]
+        if task_type is not None:
+            filters.append(EvaluationTask.task_type == task_type)
+
         total_result = await db.execute(
-            select(func.count(EvaluationTask.id)).where(self._task_access_condition(user_id))
+            select(func.count(EvaluationTask.id)).where(*filters)
         )
         total = int(total_result.scalar_one())
         rows_result = await db.execute(
             select(EvaluationTask, func.count(ModelResponse.id))
             .options(selectinload(EvaluationTask.user))
             .outerjoin(ModelResponse, ModelResponse.task_id == EvaluationTask.id)
-            .where(self._task_access_condition(user_id))
+            .where(*filters)
             .group_by(EvaluationTask.id)
             .order_by(EvaluationTask.created_at.desc(), EvaluationTask.id.desc())
             .offset(offset)
@@ -374,6 +412,7 @@ class EvaluationService:
 
         items = [
             EvaluationTaskListItemRead(
+                taskType=getattr(task, "task_type", None) or "chat",
                 taskId=task.id,
                 status=task.status,
                 prompt=task.prompt,
@@ -893,12 +932,14 @@ class EvaluationService:
             .selectinload(ModelConfig.provider),
             selectinload(EvaluationTask.responses).selectinload(ModelResponse.evaluation_result),
             selectinload(EvaluationTask.responses).selectinload(ModelResponse.feedback),
+            selectinload(EvaluationTask.responses).selectinload(ModelResponse.rag_detail),
             selectinload(EvaluationTask.user),
         )
 
     def _serialize_task(self, task: EvaluationTask, user_id: int) -> EvaluationTaskRead:
         responses = sorted(task.responses, key=lambda response: (response.created_at, response.id))
         return EvaluationTaskRead(
+            taskType=getattr(task, "task_type", None) or "chat",
             taskId=task.id,
             status=task.status,
             prompt=task.prompt,
@@ -916,15 +957,17 @@ class EvaluationService:
         snapshot = response.config_snapshot or {}
         answer = response.answer_text if response.status == "success" else response.error_message or response.answer_text
         feedback = self._serialize_feedback(response.feedback, user_id)
-        score = self._serialize_score(
-            response.evaluation_result,
-            prompt=prompt,
-            answer=response.answer_text,
-            feedback=feedback,
-        )
+        rag_detail = getattr(response, "rag_detail", None)
+        if rag_detail is not None:
+            answer = response.answer_text
+            score = serialize_rag_score(response.evaluation_result, rag_detail, prompt, answer, feedback)
+        else:
+            score = self._serialize_score(response.evaluation_result, prompt=prompt,
+                answer=response.answer_text, feedback=feedback)
 
         return ModelResponseRead(
             id=response.id,
+            rag=serialize_rag_detail(rag_detail) if rag_detail is not None else None,
             modelConfigId=response.model_config_id,
             modelName=(
                 model_config.display_name
@@ -1054,6 +1097,11 @@ class EvaluationService:
         feedback: EvaluationFeedbackRead,
     ) -> EvaluationScoreRead:
         result = response.evaluation_result
+        rag_detail = getattr(response, "rag_detail", None)
+        if rag_detail is not None:
+            if result is not None and result.score_status == "scored" and not result.excluded_from_stats and rag_detail.base_final is not None:
+                result.final_score = apply_rag_feedback(rag_detail.base_final, feedback.like_count, feedback.dislike_count)
+            return serialize_rag_score(result, rag_detail, response.task.prompt, response.answer_text, feedback)
         if result is None:
             return self._serialize_score(None, prompt=response.task.prompt, answer=response.answer_text)
 
@@ -1129,7 +1177,7 @@ class EvaluationService:
 
     def _task_access_condition(self, user_id: int) -> object:
         return or_(
-            EvaluationTask.visibility == "public",
+            and_(EvaluationTask.visibility == "public", EvaluationTask.task_type == "chat"),
             EvaluationTask.user_id == user_id,
         )
 
