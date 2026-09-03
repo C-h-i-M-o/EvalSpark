@@ -4,6 +4,11 @@ import { formatHistoryTime, historyStatusText, isStalePendingTask, updateTaskRes
 import type { EvaluationTaskRead, EvaluationTaskListItem } from "../evaluation/types";
 
 describe("React 阶段四历史任务逻辑", () => {
+  test("RAG 使用 60 分钟收尾边界，不套用普通任务两分钟", () => {
+    const task = { taskType: "rag" as const, status: "pending", createdAt: "2026-09-03T00:00:00" };
+    expect(isStalePendingTask(task, new Date("2026-09-03T00:03:00Z"))).toBe(false);
+    expect(isStalePendingTask(task, new Date("2026-09-03T01:00:00Z"))).toBe(true);
+  });
   test("进行中任务超过等待阈值后显示为超时未完成", () => {
     const task: EvaluationTaskListItem = {
       taskId: 1,

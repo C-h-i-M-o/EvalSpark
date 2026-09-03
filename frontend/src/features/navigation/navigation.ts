@@ -12,6 +12,8 @@ export type RouteAccess =
 
 export const navigationItems: NavigationItem[] = [
   { path: "/", label: "评测工作台" },
+  { path: "/rag", label: "RAG 评测" },
+  { path: "/knowledge-bases", label: "知识库" },
   { path: "/models", label: "模型配置", adminOnly: true },
   { path: "/users", label: "用户额度", adminOnly: true },
   { path: "/scoring-rules", label: "评分配置", adminOnly: true },

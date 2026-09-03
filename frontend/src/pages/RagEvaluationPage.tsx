@@ -1,0 +1,38 @@
+import { Alert, Button, Input, Select, Skeleton, Space, Switch, Tag } from "antd";
+import { Link } from "react-router-dom";
+import { ModelResponseCard } from "../components/ModelResponseCard";
+import { useRagEvaluation } from "../features/rag/useRagEvaluation";
+import { formatRagNumber, RAG_EXTERNAL_NOTICE } from "../features/rag/rag";
+
+export function RagEvaluationPage() {
+  const view = useRagEvaluation();
+  return <section className="rag-page">
+    <header className="page-head"><div><h2>RAG 评测</h2><p>比较模型如何检索资料、引用证据与忠实作答。</p></div><Tag>仅自己可见</Tag></header>
+    <section className="rag-surface">
+      <div className="rag-toolbar"><h3>选择资料与模型</h3><Space wrap><Link to="/knowledge-bases">管理知识库</Link><Button onClick={view.refresh} disabled={view.running || view.initialLoading}>刷新配置</Button></Space></div>
+      {view.initialLoading && !view.models.length ? <Skeleton paragraph={{ rows: 2 }} /> : null}
+      <div className="rag-form-pair">
+        <div className="rag-field"><label htmlFor="rag-library">私有知识库</label><Select id="rag-library" value={view.libraryId} options={view.libraryOptions} onChange={view.selectLibrary} disabled={view.running} placeholder="选择已就绪的知识库" /></div>
+        <div className="rag-field"><label htmlFor="rag-judge">独立评审模型 · 固定三轮</label><Select id="rag-judge" value={view.judgeId} options={view.idleOptions} onChange={view.setJudgeId} disabled={view.running} placeholder="保留一个未参与回答的模型" /></div>
+      </div>
+      {!view.initialLoading && !view.libraries.some((base) => base.available) && <p className="rag-note">没有可用知识库，请先上传文档并等待索引完成。</p>}
+      {view.library && <p className="rag-note">当前资料版本 {view.library.contentRevision} · {view.library.documentCount} 份文档 · {view.library.chunkCount} 块</p>}
+      <fieldset className="rag-models"><legend>候选回答模型</legend><Space wrap>{view.modelOptions.map((model) =>
+        <Button key={model.id} type={model.selected ? "primary" : "default"} aria-pressed={model.selected} disabled={view.running} onClick={model.toggle}>{model.displayName}</Button>)}</Space></fieldset>
+      {!view.initialLoading && !view.idleOptions.length && <Alert type="warning" title="请至少保留一个空闲模型用于联合评审；仅有一个可用模型时无法开始。" />}
+      <div className="rag-field"><label htmlFor="rag-prompt">原始问题</label><Input.TextArea id="rag-prompt" rows={5} value={view.prompt} disabled={view.running} onChange={view.changePrompt} onKeyDown={view.handleKeyDown} placeholder="输入问题；Enter 开始，Shift + Enter 换行" /></div>
+      <Alert type="warning" showIcon title="资料发送范围" description={RAG_EXTERNAL_NOTICE} />
+      <div className="rag-toolbar"><Space><Switch aria-label="思考模式" checked={view.enableThinking} onChange={view.setEnableThinking} disabled={view.running} />思考模式</Space>
+        <Space><Button type="primary" disabled={!view.canSubmit} onClick={view.submit}>开始私有评测</Button>{view.running && <Button danger onClick={view.cancel}>停止</Button>}</Space></div>
+      <p className="rag-note">今日已用 {formatRagNumber(view.tokenUsage?.usedTokens, 0)} Token · 剩余 {view.tokenUsage?.unlimited ? "不限额" : formatRagNumber(view.tokenUsage?.remainingTokens, 0)}。外部调用结束后计入额度，并发或长任务可能超出剩余值。</p>
+    </section>
+    {view.quotaExhausted && <Alert type="error" title="今日 Token 额度已用完，请明日再试或联系管理员调整额度。" />}
+    {view.error && <Alert type="error" showIcon title={view.error} />}
+    {view.notice && <Alert type="info" showIcon title={view.notice} />}
+    {view.running && <p className="rag-running" role="status">正在执行检索、回答与三轮评审 · 已等待 {view.elapsed} 秒</p>}
+    {view.task?.taskId && <p className="rag-note">任务 #{view.task.taskId} · <Link to="/history">在历史任务查看持久化结果</Link></p>}
+    {!!view.task?.responses.length && <section className="response-grid">{view.task.responses.map((response) =>
+      <ModelResponseCard key={response.modelConfigId ?? response.id} response={response} elapsedSeconds={view.elapsed}
+        feedbackSubmitting={typeof response.id === "number" && view.feedbackIds.includes(response.id)} onFeedback={view.feedback} />)}</section>}
+  </section>;
+}

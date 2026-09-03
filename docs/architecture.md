@@ -75,6 +75,12 @@ Worker 不等待 Embedding 健康，模型离线也能恢复和清理。Celery �
 
 `EvaluationService` 仅按 taskType 分派，chat 保持原编排；任务详情加载独立证据，不重新检索。私有查询条件在 SQL 层执行，管理员统计读取无正文汇总，互动详情排除他人的 RAG。正常关闭逐层 aclose、取消并等待工作协程后收尾；全链路时限 55 分钟，Worker 关闭超过 60 分钟的 pending RAG。新代码已编写，当前 Docker 关闭，运行验收待补。
 
+### V3 React 接点（阶段 6）
+
+`api/knowledgeBases.ts` 复用 Cookie、错误解析和可取消 JSON 请求，封装私有分页/原文件/作业 API。`useKnowledgeBases.ts` 管理表单、异步动作与 5 秒轮询，退出/切换清理 AbortController 与定时器。`useRagEvaluation.ts` 复用普通评测 NDJSON 批处理，按运行版本号阻止旧任务覆盖新选择；`.tsx` 页面只组装 UI，不新增依赖或并行维护 Vue。
+
+`rag.ts` 的纯转换显式接收 rag_stage/rag_retrieval；`ModelResponseCard` 复用 Markdown、反馈和详情弹窗，挂载独立的证据/评分面板。每个面板只消费当前回答快照，正文以转义文本展示；不构造跨回答 S1 锚点，也不重新查询当前知识库。`useHistory.ts` 承接原分页/详情/反馈行为并增加类型筛选和请求取消。RAG 运行中记录转换为阶段卡片而非误报失败。前端测试、构建和视觉验收尚未执行。
+
 ### 当前普通评测流程
 
 1. 用户注册或登录，后端通过 HttpOnly Cookie JWT 恢复当前用户。

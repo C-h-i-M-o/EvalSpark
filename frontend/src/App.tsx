@@ -6,6 +6,10 @@ import zhCN from "antd/locale/zh_CN";
 import { AuthProvider } from "./features/auth/AuthContext";
 import { AppLayout } from "./layout/AppLayout";
 import { ProtectedRoute, PublicOnlyRoute } from "./routes/RouteGuards";
+import "./rag.css";
+
+const KnowledgeBasesPage = lazy(() => import("./pages/KnowledgeBasesPage").then((module) => ({ default: module.KnowledgeBasesPage })));
+const RagEvaluationPage = lazy(() => import("./pages/RagEvaluationPage").then((module) => ({ default: module.RagEvaluationPage })));
 
 const AuthPage = lazy(() => import("./pages/AuthPage").then((module) => ({ default: module.AuthPage })));
 const EvaluationPage = lazy(() =>
@@ -70,6 +74,8 @@ function App() {
               }
             >
               <Route index element={<EvaluationPage />} />
+              <Route path="knowledge-bases" element={<KnowledgeBasesPage />} />
+              <Route path="rag" element={<RagEvaluationPage />} />
               <Route path="models" element={<ModelConfigsPage />} />
               <Route path="users" element={<AdminUsersPage />} />
               <Route path="scoring-rules" element={<ScoringRulesPage />} />

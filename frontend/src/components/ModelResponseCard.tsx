@@ -7,6 +7,9 @@ import type { DisplayModelResponse, EvaluationScore, FeedbackToggleResult, Score
 import { CommentPanel } from "./CommentPanel";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { formatScore, ScoreBar } from "./ScoreBar";
+import { RagEvidencePanel } from "./RagEvidencePanel";
+import { RagScoreDetails, RagScoreSummary } from "./RagScoreDetails";
+import { displayRagResponse, ragStageLabels } from "../features/rag/rag";
 
 interface ModelResponseCardProps {
   response: DisplayModelResponse;
@@ -56,16 +59,18 @@ export function ModelResponseCard({
 }: ModelResponseCardProps) {
   const [detailVisible, setDetailVisible] = useState(false);
   const detailRef = useRef<HTMLElement | null>(null);
+  response = displayRagResponse(response);
 
   if (isPendingResponse(response)) {
     return (
       <article className="response-card pending">
-        <ResponseHeader modelName={response.modelName} statusLabel="等待模型响应" scoreText="..." failed={false} />
-        <div className="pending-answer" aria-label="模型响应等待中">
+        <ResponseHeader modelName={response.modelName} statusLabel={response.interrupted ? "已中断" : response.ragStage ? ragStageLabels[response.ragStage] : "等待模型响应"} scoreText="..." failed={!!response.interrupted} />
+        {!response.interrupted && <div className="pending-answer" aria-label="模型响应等待中">
           <span />
           <span />
           <span />
-        </div>
+        </div>}
+        {response.ragRetrieval && <RagEvidencePanel {...response.ragRetrieval} />}
         <dl className="metric-row">
           <Metric label="耗时" value={`${elapsedSeconds}s`} />
           <Metric label="输出" value="等待中" />
@@ -80,11 +85,12 @@ export function ModelResponseCard({
       <article className={`response-card${response.scoring ? " scoring" : ""}`}>
         <ResponseHeader
           modelName={response.modelName}
-          statusLabel={response.scoring ? "评分中……" : "生成中"}
+          statusLabel={response.interrupted ? "已中断" : response.ragStage ? ragStageLabels[response.ragStage] : response.scoring ? "评分中……" : "生成中"}
           scoreText={response.scoring ? "评分中" : "..."}
-          failed={false}
+          failed={!!response.interrupted}
         />
-        <ScrollableMarkdownAnswer content={response.answer} placeholder="模型回答已生成，正在准备评分。" />
+        <ScrollableMarkdownAnswer content={response.answer} placeholder={response.ragStage ? "正在执行当前阶段，尚无可展示的回答。" : "模型回答已生成，正在准备评分。"} />
+        {response.ragRetrieval && <RagEvidencePanel {...response.ragRetrieval} answer={response.answer} />}
         <dl className="metric-row">
           <Metric label="耗时" value={`${elapsedSeconds}s`} />
           <Metric label="输出" value={response.scoring ? "等待评分" : "生成中"} />
@@ -107,17 +113,19 @@ export function ModelResponseCard({
         failed={failed}
       />
       <ScrollableMarkdownAnswer content={response.answer} placeholder="暂无回答内容" />
+      {response.rag && <RagEvidencePanel evidence={response.rag.evidence} rewrittenQuery={response.rag.rewrittenQuery} answer={response.answer} />}
+      {response.rag?.failureStage && <p className="rag-error">RAG 链路未获得有效评分：{response.rag.errorCode}</p>}
       <p className={`score-status-note ${score.scoreStatus}`}>{scoreStatusText(score.scoreStatus)}</p>
       <dl className="metric-row">
         <Metric label="耗时" value={`${response.latencyMs}ms`} />
         <Metric label="输出" value={String(response.outputTokens)} />
         <Metric label="成本" value={`${formatCost(response.estimatedCost)} ${response.currency}`} />
       </dl>
-      <div className="score-bars">
+      {response.rag ? <RagScoreSummary rag={response.rag} /> : <div className="score-bars">
         <ScoreBar label="相关性" value={score.relevance} />
         <ScoreBar label="完整性" value={score.completeness} />
         <ScoreBar label="清晰度" value={score.clarity} />
-      </div>
+      </div>}
       <footer className="card-actions">
         <Button
           className={feedback.liked ? "active" : ""}
@@ -135,7 +143,7 @@ export function ModelResponseCard({
           点踩 {feedback.dislikeCount}
         </Button>
         <Button type="primary" ghost onClick={() => setDetailVisible(true)}>
-          查看全文
+          {response.rag ? "评分与全文" : "查看全文"}
         </Button>
       </footer>
       <Modal
@@ -152,6 +160,8 @@ export function ModelResponseCard({
       >
         <section ref={detailRef} className="response-detail-modal">
           <MarkdownRenderer content={response.answer} />
+          {response.rag && <><RagEvidencePanel evidence={response.rag.evidence} rewrittenQuery={response.rag.rewrittenQuery} answer={response.answer} /><RagScoreDetails rag={response.rag} score={response.score} /></>}
+          {response.rag && <h4>规则检查（占基础分 20%，以下为规则内部分项权重）</h4>}
           <div className="score-detail-list">
             {dimensionLabels.map((dimension) => {
               const value = score[dimension.key];
@@ -203,7 +213,7 @@ export function ModelResponseCard({
               {score.judgeScoreRange === null ? "。" : `，三次分差 ${formatScore(score.judgeScoreRange)}。`}
             </p>
           </article>
-          {score.judgeRuns.length > 0 ? (
+          {!response.rag && score.judgeRuns.length > 0 ? (
             <article className="score-detail-item">
               <header>
                 <span>三次 LLM 评分</span>
@@ -225,7 +235,7 @@ export function ModelResponseCard({
               </div>
             </article>
           ) : null}
-          {score.judgeComment ? (
+          {!response.rag && score.judgeComment ? (
             <article className="score-detail-item">
               <header>
                 <span>LLM 评审理由</span>
@@ -237,7 +247,7 @@ export function ModelResponseCard({
               <p>{score.judgeComment}</p>
             </article>
           ) : null}
-          {showComments ? <CommentPanel responseId={response.id} /> : null}
+          {showComments ? <CommentPanel responseId={response.id} privateDiscussion={!!response.rag} /> : null}
         </section>
       </Modal>
     </article>
@@ -330,6 +340,7 @@ function Metric({ label, value }: { label: string; value: string }) {
 
 function normalizedScore(score: EvaluationScore): NormalizedScore {
   return {
+    scoreVersion: score.scoreVersion ?? "chat-v1",
     relevance: score.relevance || 0,
     completeness: score.completeness || 0,
     clarity: score.clarity || 0,

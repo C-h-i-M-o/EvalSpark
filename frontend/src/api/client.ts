@@ -48,6 +48,8 @@ export interface TokenUsage {
 export type EvaluationVisibility = "public" | "private";
 
 export interface EvaluationTaskPayload {
+  taskType?: "chat" | "rag";
+  knowledgeBaseId?: number;
   prompt: string;
   modelIds: number[];
   enableJudge: boolean;
@@ -291,8 +293,9 @@ export class ApiError extends Error {
   }
 }
 
-async function fetchJson<T>(url: string): Promise<T> {
+export async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(url, {
+    ...(signal ? { signal } : {}),
     credentials: "include",
     headers: {
       Accept: "application/json"
@@ -351,7 +354,7 @@ async function deleteJson(url: string): Promise<void> {
   }
 }
 
-async function readErrorMessage(response: Response): Promise<string> {
+export async function readErrorMessage(response: Response): Promise<string> {
   const payload = (await response.json().catch(() => null)) as { detail?: unknown } | null;
   return formatErrorDetail(payload?.detail) || `请求失败：${response.status}`;
 }
@@ -359,6 +362,9 @@ async function readErrorMessage(response: Response): Promise<string> {
 function formatErrorDetail(detail: unknown): string | null {
   if (typeof detail === "string") {
     return detail;
+  }
+  if (detail && typeof detail === "object" && "message" in detail && typeof detail.message === "string") {
+    return detail.message;
   }
 
   if (Array.isArray(detail)) {
@@ -412,25 +418,26 @@ export async function logoutUser(): Promise<void> {
   await postJson<void>("/api/auth/logout");
 }
 
-export async function listAvailableModels(): Promise<AvailableModel[]> {
-  return fetchJson<AvailableModel[]>("/api/models/available");
+export async function listAvailableModels(signal?: AbortSignal): Promise<AvailableModel[]> {
+  return fetchJson<AvailableModel[]>("/api/models/available", signal);
 }
 
-export async function getTodayTokenUsage(): Promise<TokenUsage> {
-  return fetchJson<TokenUsage>("/api/token-usage/me/today");
+export async function getTodayTokenUsage(signal?: AbortSignal): Promise<TokenUsage> {
+  return fetchJson<TokenUsage>("/api/token-usage/me/today", signal);
 }
 
-export async function listEvaluationTasks(params: { page: number; pageSize: number }): Promise<EvaluationTaskListRead> {
+export async function listEvaluationTasks(params: { page: number; pageSize: number; taskType?: "chat" | "rag" }, signal?: AbortSignal): Promise<EvaluationTaskListRead> {
   return fetchJson<EvaluationTaskListRead>(
     `/api/evaluation/tasks?${new URLSearchParams({
       page: String(params.page),
-      pageSize: String(params.pageSize)
-    }).toString()}`
+      pageSize: String(params.pageSize),
+      ...(params.taskType ? { taskType: params.taskType } : {})
+    }).toString()}`, signal
   );
 }
 
-export async function getEvaluationTask(taskId: number): Promise<EvaluationTaskRead> {
-  return fetchJson<EvaluationTaskRead>(`/api/evaluation/tasks/${taskId}`);
+export async function getEvaluationTask(taskId: number, signal?: AbortSignal): Promise<EvaluationTaskRead> {
+  return fetchJson<EvaluationTaskRead>(`/api/evaluation/tasks/${taskId}`, signal);
 }
 
 export async function submitResponseFeedback(
@@ -671,9 +678,11 @@ export async function validateJudgePromptGroup(id: number): Promise<JudgePromptV
 
 export async function streamEvaluationTask(
   payload: EvaluationTaskPayload,
-  onEvent: (event: EvaluationStreamEvent) => void
+  onEvent: (event: EvaluationStreamEvent) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   const response = await fetch("/api/evaluation/tasks/stream", {
+    ...(signal ? { signal } : {}),
     method: "POST",
     credentials: "include",
     headers: {
@@ -696,23 +705,25 @@ export async function streamEvaluationTask(
   const decoder = new TextDecoder();
   let buffer = "";
 
-  while (true) {
-    const result = await reader.read();
-    if (result.done) {
-      break;
+  try {
+    while (true) {
+      const result = await reader.read();
+      if (result.done) {
+        break;
+      }
+      buffer += decoder.decode(result.value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        emitStreamLine(line, onEvent);
+      }
     }
-
-    buffer += decoder.decode(result.value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
-      emitStreamLine(line, onEvent);
-    }
+    buffer += decoder.decode();
+    emitStreamLine(buffer, onEvent);
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
   }
-
-  buffer += decoder.decode();
-  emitStreamLine(buffer, onEvent);
 }
 
 function emitStreamLine(

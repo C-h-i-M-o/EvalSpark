@@ -8,6 +8,7 @@ import type {
   PendingModelResponse,
   StreamingModelResponse
 } from "./types";
+import { mergeRagStage } from "../rag/rag";
 
 export interface StreamEventBatcher {
   enqueue: (event: EvaluationStreamEvent) => void;
@@ -69,10 +70,15 @@ export function mergeStreamEvent(
   state: EvaluationTaskState | null,
   event: EvaluationStreamEvent
 ): EvaluationTaskState {
+  if (event.type === "rag_stage" || event.type === "rag_retrieval") {
+    return mergeRagStage(state, event);
+  }
   if (event.type === "task_started") {
     return {
+      taskType: event.taskType ?? state?.taskType ?? "chat",
       taskId: event.taskId,
-      status: event.status,
+      status: event.status ?? "running",
+      visibility: state?.visibility,
       prompt: event.prompt,
       responses: state?.responses || []
     };
@@ -100,6 +106,7 @@ export function mergeStreamEvent(
   }
 
   return {
+    taskType: event.task.taskType ?? "chat",
     taskId: event.task.taskId,
     status: event.task.status,
     prompt: event.task.prompt,
@@ -229,6 +236,8 @@ function appendModelDelta(
       modelConfigId,
       modelName: response.modelName,
       answer: delta,
+      ragStage: response.ragStage,
+      ragRetrieval: response.ragRetrieval,
       streaming: true,
       scoring: false
     };
@@ -267,6 +276,8 @@ function markModelScoring(responses: DisplayModelResponse[], modelConfigId: numb
         modelConfigId,
         modelName: response.modelName,
         answer: "",
+        ragStage: response.ragStage,
+        ragRetrieval: response.ragRetrieval,
         streaming: false,
         scoring: true
       };

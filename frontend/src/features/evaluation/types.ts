@@ -1,6 +1,8 @@
 import type { AvailableModel, EvaluationVisibility, FeedbackType } from "../../api/client";
+import type { RagDetail, RagProgress, RagStreamEvent } from "../rag/types";
 
 export interface EvaluationScore {
+  scoreVersion?: "chat-v1" | "rag-v1";
   relevance: number;
   completeness: number;
   clarity: number;
@@ -46,7 +48,8 @@ export interface ModelCostDetails {
   cacheCreationCost: number;
 }
 
-export interface ModelResponse {
+export interface ModelResponse extends RagProgress {
+  rag?: RagDetail | null;
   id: number;
   modelConfigId: number | null;
   modelName: string;
@@ -66,14 +69,14 @@ export interface ModelResponse {
   feedback: EvaluationFeedback;
 }
 
-export interface PendingModelResponse {
+export interface PendingModelResponse extends RagProgress {
   id: string;
   modelConfigId: number;
   modelName: string;
   pending: true;
 }
 
-export interface StreamingModelResponse {
+export interface StreamingModelResponse extends RagProgress {
   id: string;
   modelConfigId: number;
   modelName: string;
@@ -85,6 +88,7 @@ export interface StreamingModelResponse {
 export type DisplayModelResponse = ModelResponse | PendingModelResponse | StreamingModelResponse;
 
 export interface EvaluationTaskState {
+  taskType?: "chat" | "rag";
   taskId: number | null;
   status: string;
   prompt: string;
@@ -93,6 +97,7 @@ export interface EvaluationTaskState {
 }
 
 export interface EvaluationTaskRead {
+  taskType?: "chat" | "rag";
   taskId: number;
   status: string;
   prompt: string;
@@ -105,6 +110,7 @@ export interface EvaluationTaskRead {
 }
 
 export interface EvaluationTaskListItem {
+  taskType?: "chat" | "rag";
   taskId: number;
   status: string;
   prompt: string;
@@ -141,11 +147,13 @@ export interface CommentListRead {
 }
 
 export type EvaluationStreamEvent =
+  | RagStreamEvent
   | {
       type: "task_started";
+      taskType?: "chat" | "rag";
       taskId: number;
       prompt: string;
-      status: string;
+      status?: string;
     }
   | {
       type: "model_response";

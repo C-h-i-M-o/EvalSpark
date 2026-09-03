@@ -1,0 +1,55 @@
+.rag-page { display: grid; gap: 20px; min-width: 0; color: var(--color-ink); }
+.rag-page h2, .rag-page h3, .rag-page h4 { text-wrap: balance; margin-top: 0; }
+.rag-page h2 { margin-bottom: 8px; }
+.rag-page .page-head h2 { font-size: 2rem; }
+.rag-page .response-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); }
+.rag-page .response-card { min-width: 0; }
+.rag-page .response-head h3 { overflow-wrap: anywhere; }
+.rag-page p, .rag-evidence p, .rag-score-details p { overflow-wrap: anywhere; line-height: 1.65; }
+.rag-page .page-head p { margin: 0; }
+.rag-surface { padding: 24px; background: #fff; border: 1px solid #c8d3d1; border-radius: 12px; min-width: 0; }
+.knowledge-layout { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); gap: 20px; align-items: start; }
+.knowledge-list { display: grid; gap: 8px; }
+.knowledge-item { display: grid; gap: 8px; padding: 14px; text-align: left; width: 100%; border: 1px solid transparent; background: transparent; border-radius: 8px; overflow-wrap: anywhere; }
+.knowledge-item span, .rag-note, .rag-table small, .rag-evidence small { color: #425850; font-size: 13px; }
+.knowledge-item.active { background: #e8f2ed; border-color: var(--color-primary); }
+.knowledge-item:hover:not(:disabled) { background: #eff5f2; }
+.knowledge-workspace { display: grid; gap: 16px; }
+.rag-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.rag-toolbar h3 { margin-bottom: 4px; }
+.rag-form-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; margin: 20px 0; }
+.rag-field { display: grid; gap: 8px; margin: 20px 0; }
+.rag-form-pair .rag-field { margin: 0; }
+.rag-field label, .rag-upload label { font-weight: 600; }
+.rag-upload { display: grid; gap: 12px; padding-block: 18px; border-block: 1px solid #d7dfdc; }
+.rag-upload input { width: 100%; }
+.rag-upload a, .rag-note a, .rag-toolbar a { color: var(--color-primary); text-decoration: underline; text-underline-offset: 3px; }
+.rag-models { border: 0; padding: 0; margin: 24px 0; }
+.rag-models legend { font-weight: 600; margin-bottom: 10px; }
+.rag-page .ant-alert { margin-block: 12px; }
+.rag-page .ant-select { width: 100%; }
+.rag-running { padding: 12px 16px; border-radius: 8px; background: #e8f2ed; margin: 0; }
+.rag-evidence, .rag-score-details { border-top: 1px solid #c8d3d1; padding-top: 16px; margin-top: 16px; min-width: 0; }
+.rag-evidence h4, .rag-score-details h4 { margin-block: 0 12px; }
+.rag-evidence-item, .rag-judge-run { border-bottom: 1px solid #d7dfdc; padding-block: 12px; }
+.rag-evidence summary, .rag-score-details summary { cursor: pointer; overflow-wrap: anywhere; padding: 6px 2px; }
+.rag-evidence small, .rag-table small { display: block; margin-top: 5px; }
+.rag-evidence summary strong { color: var(--color-primary); }
+.rag-evidence-text { max-height: 340px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 14px; background: #f1f5f3; line-height: 1.7; font-size: 13px; font-family: inherit; }
+.rag-table-scroll { overflow: auto; min-width: 0; }
+.rag-table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; }
+.rag-table caption { text-align: left; font-weight: 600; padding-bottom: 12px; }
+.rag-table th, .rag-table td { border-bottom: 1px solid #d7dfdc; padding: 12px 10px; vertical-align: top; overflow-wrap: anywhere; min-width: 100px; max-width: 260px; }
+.rag-table th { background: #f1f5f3; white-space: nowrap; }
+.rag-table pre { min-width: 190px; }
+.rag-dimensions { display: flex; flex-wrap: wrap; gap: 16px 28px; margin-block: 18px; }
+.rag-dimensions dd { margin: 6px 0; font-size: 20px; font-variant-numeric: tabular-nums; }
+.rag-formula { background: #f1f5f3; padding: 12px; font-size: 13px; }
+.rag-claims { padding-left: 22px; }
+.rag-claims li { padding-block: 10px; }
+.rag-error { color: #992f1e !important; }
+.rag-page :focus-visible, .rag-evidence summary:focus-visible, .rag-score-details summary:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; }
+.rag-page button { transition: background-color 160ms ease-out; }
+@media (max-width: 900px) { .knowledge-layout { grid-template-columns: 1fr; } .knowledge-list { max-height: 320px; overflow: auto; } }
+@media (max-width: 600px) { .rag-surface { padding: 16px; } .rag-form-pair { grid-template-columns: 1fr; gap: 12px; } .rag-toolbar { align-items: flex-start; } }
+@media (prefers-reduced-motion: reduce) { .rag-page button { transition: none; } }

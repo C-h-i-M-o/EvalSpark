@@ -16,7 +16,7 @@ MultiChatEval 是一个“面向多模型问答的对话质量评估系统”。
 
 ## 当前技术栈
 
-- V3 RAG 正在实施：Compose 增加 TEI CPU（Qwen3-Embedding-0.6B）、Qdrant、Redis、Celery Worker；规格、阶段提交及验收统一见 `docs/v3-rag-spec-plan.md`。阶段 1—4 的私有知识库、四格式索引、逐模型检索回答、证据快照与阶段用量已实现。阶段 5 已接入三轮联合评分、RAG 任务 API/历史/反馈、私有内容隔离和超期收尾代码；React 页面待阶段 6。当前设备内存受限且 Docker 已关闭，老大允许延期测试和本地部署，优先完成各阶段代码；不要重启 Docker，阶段 5 新增测试及真实模型全链路待高内存设备验收，不得把延期记为通过。迁移 `20260902_01/02` 仅应用于独立测试库，业务升级仍须确认备份与恢复；新后端依赖 task_type 列和块正文 MEDIUMTEXT。Agent 与 AI 安全测试集另行设计。
+- V3 RAG 正在实施：Compose 增加 TEI CPU（Qwen3-Embedding-0.6B）、Qdrant、Redis、Celery Worker；规格、阶段提交及验收统一见 `docs/v3-rag-spec-plan.md`。阶段 1—5 已实现私有知识库、四格式索引、逐模型检索回答、证据快照、用量、三轮联合评分、任务 API/历史/反馈、私有内容隔离与超期收尾代码。阶段 6 已接入 React `/knowledge-bases`、`/rag`、历史类型筛选及引用/评分/费用 UI，行为放 `.ts` hooks，Vue 不改。当前设备内存受限且 Docker 已关闭，老大允许延期测试和本地部署，优先完成各阶段代码；不要重启 Docker，阶段 5—6 新增测试、前端构建、浏览器及真实模型全链路待高内存设备验收，不得把延期记为通过。迁移 `20260902_01/02` 仅应用于独立测试库，业务升级仍须确认备份与恢复；新后端依赖 task_type 列和块正文 MEDIUMTEXT。Agent 与 AI 安全测试集另行设计。
 - 后端：Python、FastAPI、SQLAlchemy 2.0、Alembic、Pydantic Settings、pytest
 - 当前主前端：React 19、TypeScript、Vite、React Router、Tailwind CSS、Ant Design、Recharts、GSAP，独立目录 `frontend/` 并复用现有后端 API
 - 历史前端：Vue 3、JavaScript、Vite、Pinia、Vue Router、Axios、Element Plus、Markdown-it、DOMPurify、GSAP，位于 `vue-frontend/`，后续不再作为主要开发目标

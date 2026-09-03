@@ -11,11 +11,12 @@ import { formatHistoryTime } from "../features/history/history";
 
 interface CommentPanelProps {
   responseId: number;
+  privateDiscussion?: boolean;
 }
 
 const pageSize = 10;
 
-export function CommentPanel({ responseId }: CommentPanelProps) {
+export function CommentPanel({ responseId, privateDiscussion = false }: CommentPanelProps) {
   const [comments, setComments] = useState<CommentRead[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -79,7 +80,7 @@ export function CommentPanel({ responseId }: CommentPanelProps) {
     <section className="comment-panel">
       <header className="comment-panel-head">
         <div>
-          <p className="panel-label">公开讨论</p>
+          <p className="panel-label">{privateDiscussion ? "私有讨论" : "公开讨论"}</p>
           <h4>回答评论</h4>
         </div>
         <span>{total} 条</span>
@@ -92,7 +93,7 @@ export function CommentPanel({ responseId }: CommentPanelProps) {
         onChange={(event) => setContent(event.target.value)}
       />
       <div className="comment-actions">
-        <span>评论公开展示，不参与评分。</span>
+        <span>{privateDiscussion ? "评论仅自己可见，不参与评分。" : "评论公开展示，不参与评分。"}</span>
         <button type="button" disabled={!content.trim() || submitting} onClick={() => void submitComment()}>
           {submitting ? "发布中" : "发布评论"}
         </button>

@@ -2,6 +2,7 @@ import type { EvaluationTaskRead, FeedbackToggleResult } from "../evaluation/typ
 
 const HISTORY_PENDING_TIMEOUT_MS = 120 * 1000;
 type HistoryStatusSource = {
+  taskType?: "chat" | "rag";
   status: string;
   createdAt?: string | null;
   completedAt?: string | null;
@@ -44,7 +45,16 @@ export function isStalePendingTask(
   if (Number.isNaN(createdAt.getTime())) {
     return false;
   }
-  return now.getTime() - createdAt.getTime() >= HISTORY_PENDING_TIMEOUT_MS;
+  const timeout = taskItem.taskType === "rag" ? 60 * 60 * 1000 : HISTORY_PENDING_TIMEOUT_MS;
+  return now.getTime() - createdAt.getTime() >= timeout;
+}
+
+export function historyEmptyCopy(task: HistoryStatusSource): { title: string; description: string } {
+  const stale = isStalePendingTask(task);
+  const running = task.status === "pending" || task.status === "running";
+  return { title: stale ? "任务超时未完成" : running ? "模型回答仍在生成" : "暂无模型回答",
+    description: stale ? "该任务超过等待时间后仍未产生模型回答，可以刷新历史任务查看收尾状态。"
+      : running ? "模型请求尚未完成，可以稍后刷新详情查看最新结果。" : "该任务没有可展示的模型回答。" };
 }
 
 export function formatHistoryTime(value: string | null | undefined): string {
