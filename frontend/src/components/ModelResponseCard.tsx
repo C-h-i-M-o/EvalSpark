@@ -16,6 +16,7 @@ interface ModelResponseCardProps {
   elapsedSeconds: number;
   feedbackSubmitting: boolean;
   showComments?: boolean;
+  privateDiscussion?: boolean;
   onFeedback: (responseId: number, feedbackType: FeedbackToggleResult["feedbackType"]) => void;
 }
 
@@ -55,6 +56,7 @@ export function ModelResponseCard({
   elapsedSeconds,
   feedbackSubmitting,
   showComments = false,
+  privateDiscussion = false,
   onFeedback
 }: ModelResponseCardProps) {
   const [detailVisible, setDetailVisible] = useState(false);
@@ -247,7 +249,7 @@ export function ModelResponseCard({
               <p>{score.judgeComment}</p>
             </article>
           ) : null}
-          {showComments ? <CommentPanel responseId={response.id} privateDiscussion={!!response.rag} /> : null}
+          {showComments ? <CommentPanel responseId={response.id} privateDiscussion={privateDiscussion} /> : null}
         </section>
       </Modal>
     </article>

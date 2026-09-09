@@ -315,15 +315,16 @@ def parse_document(path: Path, media_type: str) -> list[SourceBlock]:
     return blocks
 
 
-def split_blocks(blocks: list[SourceBlock], tokenizer: Tokenizer, chunk_size: int, overlap: int) -> list[DocumentChunk]:
+def split_blocks(blocks: list[SourceBlock], tokenizer: Tokenizer | None, chunk_size: int, overlap: int) -> list[DocumentChunk]:
     from semantic_text_splitter import MarkdownSplitter, TextSplitter
 
     if type(chunk_size) is not int or type(overlap) is not int or not 128 <= chunk_size <= 2048 or not 0 <= overlap < chunk_size:
         raise KnowledgeBaseError("invalid_chunking", "切块大小或重叠 Token 数无效", 422)
     if not blocks or len({block.source.kind for block in blocks}) != 1:
         raise KnowledgeBaseError("invalid_source", "文档来源为空或类型不一致", 415)
-    tokenizer.no_truncation()
-    tokenizer.no_padding()
+    if tokenizer is not None:
+        tokenizer.no_truncation()
+        tokenizer.no_padding()
     parts: list[str] = []
     starts: list[int] = []
     ends: list[int] = []
@@ -343,8 +344,9 @@ def split_blocks(blocks: list[SourceBlock], tokenizer: Tokenizer, chunk_size: in
     text = "".join(parts)
     splitter_type = MarkdownSplitter if blocks[0].markdown else TextSplitter
     # 开源切分器仅计算正文 Token；Qwen 在推理输入末尾另加 EOS，需预留相同开销。
-    capacity = chunk_size - tokenizer.num_special_tokens_to_add(False)
-    splitter = splitter_type.from_huggingface_tokenizer(tokenizer, capacity, overlap=min(overlap, capacity - 1), trim=True)
+    capacity = chunk_size - tokenizer.num_special_tokens_to_add(False) if tokenizer is not None else chunk_size
+    splitter = (splitter_type.from_huggingface_tokenizer(tokenizer, capacity, overlap=min(overlap, capacity - 1), trim=True)
+        if tokenizer is not None else splitter_type(capacity, overlap=overlap, trim=True))
     chunks: list[DocumentChunk] = []
     covered_until = 0
     for start, content in splitter.chunk_indices(text):
@@ -352,7 +354,7 @@ def split_blocks(blocks: list[SourceBlock], tokenizer: Tokenizer, chunk_size: in
         if text[start:end] != content or end <= covered_until or text[covered_until:start].strip():
             raise KnowledgeBaseError("invalid_chunk_location", "切块来源覆盖校验失败", 415)
         covered_until = end
-        token_count = len(tokenizer.encode(content, add_special_tokens=True).ids)
+        token_count = len(tokenizer.encode(content, add_special_tokens=True).ids) if tokenizer is not None else len(content)
         if not 0 < token_count <= chunk_size:
             raise KnowledgeBaseError("chunk_too_large", "切块 Token 复核失败，不能截断后索引", 415)
         first = bisect_right(ends, start)

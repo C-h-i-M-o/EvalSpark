@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 from pydantic import BeforeValidator, Field, JsonValue, StrictBool, StrictInt, model_validator
 
 from app.schemas.knowledge_base import KnowledgeSchema, SourceLocation
+from app.core.config import Settings
 
 
 class RagEvidence(KnowledgeSchema):
@@ -38,6 +39,7 @@ class RagModelSnapshot(KnowledgeSchema):
 
 
 class RagStageUsage(KnowledgeSchema):
+    external_embedding: bool = False
     stage: UsageStage
     run_index: StrictInt = Field(default=1, ge=1, le=3)
     status: Literal["pending", "known", "unknown"]
@@ -77,13 +79,15 @@ class RagUsageSummary(KnowledgeSchema):
 
 
 class RagTaskContext(KnowledgeSchema):
+    # 仅服务端本次任务使用，序列化响应和历史快照不得包含凭据。
+    embedding_runtime: Settings | None = Field(default=None, exclude=True, repr=False)
     task_id: StrictInt = Field(gt=0)
     user_id: StrictInt = Field(gt=0)
     knowledge_base_id: StrictInt = Field(gt=0)
     content_revision: StrictInt = Field(gt=0)
     document_versions: list[tuple[int, int]]
     prompt: str
-    enable_thinking: bool = False
+    enable_thinking: bool = True
 
 
 class PreparedRagResponse(KnowledgeSchema):

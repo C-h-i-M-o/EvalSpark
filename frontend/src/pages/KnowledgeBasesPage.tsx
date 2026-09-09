@@ -8,7 +8,7 @@ import type { KnowledgeBaseForm } from "../features/knowledge-bases/types";
 export function KnowledgeBasesPage() {
   const view = useKnowledgeBases();
   return <section className="rag-page">
-    <header className="page-head"><div><h2>私有知识库</h2><p>管理检索资料、切分配置与索引进度。只有你能访问这些内容。</p></div>
+    <header className="page-head"><div><p className="eyebrow">检索资料管理</p><h2>私有知识库</h2><p>管理检索资料、切分配置与索引进度。只有你能访问这些内容。</p></div>
       <Space wrap><Button onClick={view.refresh} disabled={view.busy}>刷新</Button><Button type="primary" onClick={view.beginCreate} disabled={view.busy}>新建知识库</Button></Space></header>
     {view.error && <Alert type="error" showIcon title={view.error} />}
     {view.notice && <Alert type="info" showIcon title={view.notice} />}
@@ -18,10 +18,10 @@ export function KnowledgeBasesPage() {
         <Form.Item name="name" label="知识库名称" rules={[{ required: true, whitespace: true, message: "请输入名称" }, { max: 120, message: "最多 120 字" }]}><Input maxLength={120} /></Form.Item>
         <Form.Item name="description" label="说明"><Input.TextArea maxLength={2000} rows={2} /></Form.Item>
         <div className="rag-form-pair">
-          <Form.Item name="chunkSize" label="切块大小（Token）" rules={[{ required: true }]}><InputNumber min={128} max={2048} precision={0} /></Form.Item>
-          <Form.Item name="chunkOverlap" label="重叠大小（Token）" rules={[{ required: true }]}><InputNumber min={0} max={2047} precision={0} /></Form.Item>
+          <Form.Item name="chunkSize" label={`切块大小（${view.chunkUnit}）`} rules={[{ required: true }]}><InputNumber min={128} max={2048} precision={0} /></Form.Item>
+          <Form.Item name="chunkOverlap" label={`重叠大小（${view.chunkUnit}）`} rules={[{ required: true }]}><InputNumber min={0} max={2047} precision={0} /></Form.Item>
         </div>
-        <p className="rag-note">使用 Qwen 分词器切分。重叠必须小于切块大小；修改参数会使整个库需要重建，重建完成前不可用于新评测。</p>
+        <p className="rag-note">按当前 Embedding 服务的{view.chunkUnit}单位切分。重叠必须小于切块大小；修改参数后需重建索引。</p>
         <Space><Button type="primary" htmlType="submit" loading={view.busy}>保存配置</Button><Button onClick={view.closeForm}>取消</Button></Space>
       </Form>
     </section>}
@@ -44,7 +44,7 @@ export function KnowledgeBasesPage() {
               <Popconfirm title="删除整个知识库？" description={RAG_DELETE_NOTICE} onConfirm={view.removeLibrary} okText="确认删除" cancelText="取消"><Button danger disabled={view.busy || view.selected.status === "deleted"}>删除知识库</Button></Popconfirm>
             </Space></header>
           <p>{view.selected.description || "未填写说明"}</p>
-          <p className="rag-note">版本 {view.selected.contentRevision} · {view.selected.documentCount}/100 份文档 · {view.selected.chunkCount.toLocaleString("zh-CN")}/100,000 块 · 切块 {view.selected.chunkSize} / 重叠 {view.selected.chunkOverlap} Token</p>
+          <p className="rag-note">版本 {view.selected.contentRevision} · {view.selected.documentCount}/100 份文档 · {view.selected.chunkCount.toLocaleString("zh-CN")}/100,000 块 · 切块 {view.selected.chunkSize} / 重叠 {view.selected.chunkOverlap} {view.chunkUnit}</p>
           {view.selected.errorCode && <Alert type="warning" title={`处理状态：${view.selected.errorCode}`} />}
           <div className="rag-upload"><label htmlFor="knowledge-upload">上传资料（每次一份，最大 20 MB）</label>
             <input id="knowledge-upload" type="file" accept=".txt,.md,.pdf,.docx" disabled={!view.canModify || view.selected.documentCount >= 100} onChange={view.upload} />

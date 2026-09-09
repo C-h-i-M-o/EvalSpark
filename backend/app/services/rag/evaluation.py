@@ -46,12 +46,16 @@ class RagEvaluationRunner:
         self.store = store
         self.embedding = embedding or EmbeddingClient()
         self.vectors = vectors or VectorClient()
+        self.use_runtime = embedding is None and vectors is None
         self.client_factory = client_factory
 
     async def prepare_rag_snapshots(self, context: RagTaskContext, prepared: list[PreparedRagResponse],
                                     models: list[RuntimeModelConfig],
                                     emit: Callable[[RagStreamEvent], Awaitable[None]] | None = None) -> None:
         by_id = {model.id: model for model in models}
+        # 候选共享不可变配置，每个任务独立创建客户端，不改服务单例状态。
+        embedding = EmbeddingClient(context.embedding_runtime) if self.use_runtime and context.embedding_runtime else self.embedding
+        vectors_client = VectorClient(context.embedding_runtime) if self.use_runtime and context.embedding_runtime else self.vectors
 
         async def prepare(item: PreparedRagResponse) -> None:
             model = by_id[item.model_config_id]
@@ -75,19 +79,24 @@ class RagEvaluationRunner:
                 if emit:
                     await emit(RagStageEvent(model_config_id=model.id, stage="retrieving"))
                 started = perf_counter()
-                count = await run_in_threadpool(self.embedding.input_token_count, query, "query")
-                pending_embedding = embedding_stage(count, 0).model_copy(update={"status": "pending", "total_tokens": None})
+                remote = isinstance(embedding, EmbeddingClient) and embedding.config.rag_embedding_protocol == "openai"
+                count = None if remote else await run_in_threadpool(embedding.input_token_count, query, "query")
+                pending_embedding = embedding_stage(count, 0, external=remote).model_copy(update={"status": "pending", "total_tokens": None})
                 await self.store.save_stage(context, item.response_id, pending_embedding, start=True)
                 try:
-                    vectors = await self.embedding.embed([query], "query")
+                    if remote:
+                        embedded = await embedding.embed_result([query], "query")
+                        vectors, count = embedded.vectors, embedded.input_tokens
+                    else:
+                        vectors = await embedding.embed([query], "query")
                 except (Exception, asyncio.CancelledError):
                     await self.store.save_stage(context, item.response_id, pending_embedding.model_copy(update={
                         "status": "unknown", "latency_ms": int((perf_counter() - started) * 1000)}))
                     raise
                 await self.store.save_stage(context, item.response_id,
-                    embedding_stage(count, int((perf_counter() - started) * 1000)))
+                    embedding_stage(count, int((perf_counter() - started) * 1000), external=remote))
                 stage = "retrieve"
-                matches = await self.vectors.search(context.user_id, context.knowledge_base_id,
+                matches = await vectors_client.search(context.user_id, context.knowledge_base_id,
                     context.document_versions, vectors[0], limit=5)
                 if not matches:
                     raise RagClientError("rag_no_evidence", "知识库中没有可用的检索片段")

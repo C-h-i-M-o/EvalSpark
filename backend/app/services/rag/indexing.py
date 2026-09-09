@@ -13,6 +13,7 @@ from starlette.concurrency import run_in_threadpool
 from tokenizers import Tokenizer
 
 from app.core.config import settings
+from app.services.embedding_config_service import get_config, runtime_config
 from app.models.knowledge_base import KnowledgeChunk, KnowledgeDocument
 from app.services.rag.clients import EmbeddingClient, RagClientError, VectorStore, load_tokenizer
 from app.services.rag.documents import DocumentChunk, parse_in_subprocess, resolve_storage_path, split_blocks
@@ -23,13 +24,14 @@ MAX_LIBRARY_CHUNKS = 100_000
 
 
 class IndexRunner:
-    def __init__(self, sessions: async_sessionmaker[AsyncSession], *, vectors: VectorStore, embedding: EmbeddingClient, tokenizer: Tokenizer | None = None, documents_dir: Path = settings.rag_documents_dir) -> None:
+    def __init__(self, sessions: async_sessionmaker[AsyncSession], *, vectors: VectorStore, embedding: EmbeddingClient, tokenizer: Tokenizer | None = None, documents_dir: Path = settings.rag_documents_dir, resolve_config: bool = False) -> None:
         self.sessions = sessions
         self.jobs = JobRepository(sessions)
         self.vectors = vectors
         self.embedding = embedding
         self.tokenizer = tokenizer
         self.documents_dir = documents_dir
+        self.resolve_config = resolve_config
 
     async def _heartbeat(self, claim: JobClaim) -> None:
         while True:
@@ -63,6 +65,14 @@ class IndexRunner:
                     await task
 
     async def _execute(self, claim: JobClaim) -> None:
+        if self.resolve_config:
+            async with self.sessions() as db:
+                row = await get_config(db)
+                # 删除不依赖服务可用性，停用 Embedding 后仍必须能删除资料。
+                disabled = bool(row is not None and row.settings_json and not row.settings_json.get("enabled"))
+                config = runtime_config(row, allow_disabled=True)
+                self.embedding = EmbeddingClient(config)
+                self.vectors.config = config
         async with self.jobs.locked(claim) as (db, kb, job):
             await self.jobs.validate_target(db, kb, job)
             operation, user_id, chunk_size, overlap = job.operation, kb.user_id, kb.chunk_size, kb.chunk_overlap
@@ -81,6 +91,8 @@ class IndexRunner:
                 async with self.jobs.locked(claim) as (_, kb, _):
                     kb.status, kb.error_code = "deleted", None
             return
+        if self.resolve_config and disabled:
+            raise KnowledgeBaseError("embedding_disabled", "管理员尚未启用 Embedding 服务")
         await self.vectors.ensure_collection()
         for document in documents:
             if document.status != "ready":
@@ -95,7 +107,8 @@ class IndexRunner:
         path = resolve_storage_path(document.storage_key, root=self.documents_dir)
         blocks = await parse_in_subprocess(path, document.media_type)
         await self._checkpoint(claim, document, "splitting")
-        tokenizer = self.tokenizer or await run_in_threadpool(load_tokenizer)
+        remote = isinstance(self.embedding, EmbeddingClient) and self.embedding.config.rag_embedding_protocol == "openai"
+        tokenizer = None if remote else (self.tokenizer or await run_in_threadpool(load_tokenizer))
         chunks = await run_in_threadpool(split_blocks, blocks, tokenizer, chunk_size, overlap)
         del blocks
         await self._reserve_chunks(claim, document, chunks)

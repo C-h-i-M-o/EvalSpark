@@ -33,12 +33,15 @@ def rag_body():
 def test_rag_request_forces_private_and_requires_knowledge_base_and_idle_judge() -> None:
     body = {"taskType": "rag", "prompt": "问题", "modelIds": [1], "judgeModelId": 2,
             "enableJudge": True, "knowledgeBaseId": 1, "visibility": "public"}
-    assert EvaluationTaskCreate(**body).visibility == "private"
+    assert EvaluationTaskCreate(**body).visibility == "public"
+    assert EvaluationTaskCreate(**{key: value for key, value in body.items() if key != "visibility"}).visibility == "private"
     for update in ({"knowledgeBaseId": None}, {"enableJudge": False}, {"judgeModelId": None},
                    {"judgeModelId": 1}, {"modelIds": []}, {"modelIds": [1, 1]}, {"prompt": "   "}):
         with pytest.raises(ValidationError):
             EvaluationTaskCreate(**(body | update))
     assert EvaluationTaskCreate(prompt="旧问题", modelIds=[1]).task_type == "chat"
+    assert EvaluationTaskCreate(**body).enable_thinking is True
+    assert EvaluationTaskCreate(**(body | {"enableThinking": False})).enable_thinking is False
 
 
 def test_stream_rejects_inaccessible_library_before_ndjson_headers(client, monkeypatch) -> None:

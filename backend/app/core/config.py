@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AnyHttpUrl, Field, RedisDsn
+from pydantic import AnyHttpUrl, Field, RedisDsn, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
@@ -22,7 +22,12 @@ class Settings(BaseSettings):
     rag_embedding_url: AnyHttpUrl = AnyHttpUrl("http://embedding:80")
     rag_qdrant_url: AnyHttpUrl = AnyHttpUrl("http://qdrant:6333")
     rag_redis_url: RedisDsn = RedisDsn("redis://redis:6379/0")
-    rag_embedding_model: Literal["Qwen/Qwen3-Embedding-0.6B"] = "Qwen/Qwen3-Embedding-0.6B"
+    rag_embedding_model: str = "Qwen/Qwen3-Embedding-0.6B"
+    rag_embedding_protocol: Literal["tei", "openai"] = "tei"
+    rag_embedding_api_key: SecretStr = SecretStr("")
+    rag_embedding_dimensions: int = Field(default=1024, ge=1, le=65536)
+    rag_embedding_query_prefix: str = "Instruct: 根据问题检索能够支持回答的文档片段\nQuery: "
+    rag_embedding_collection: str = "rag_chunks_v1"
     rag_embedding_revision: str = Field(
         default="97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3", pattern=r"^[0-9a-f]{40}$"
     )

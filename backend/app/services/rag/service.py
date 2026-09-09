@@ -42,12 +42,13 @@ class RagEvaluationService:
         if {model.id for model in models} != set(payload.model_ids) or any(not model.api_key for model in models):
             raise KnowledgeBaseError("rag_models_unavailable", "候选模型不存在或已停用")
         if (len(judges) != 1 or judges[0].id != payload.judge_model_id or not judges[0].api_key
-            or judges[0].id in {model.id for model in models}):
-            raise KnowledgeBaseError("rag_judge_unavailable", "必须选择未参与本次评测的可用评审模型")
+            or judges[0].id in {model.id for model in models}
+            or any((judge.provider_name, judge.model_name) == (model.provider_name, model.model_name) for judge in judges for model in models)):
+            raise KnowledgeBaseError("rag_judge_unavailable", "必须选择与被测模型不同的评审模型")
         # 结束鉴权/配置只读快照；数据库锁仅存在于后续专用短会话中。
         await db.rollback()
         context, prepared = await self.store.create(user_id, payload.knowledge_base_id, payload.prompt, models,
-            enable_thinking=payload.enable_thinking, conversation_id=payload.conversation_id)
+            enable_thinking=payload.enable_thinking, conversation_id=payload.conversation_id, visibility=payload.visibility)
         return RagRun(context, prepared, models, judges[0])
 
     async def read_task(self, run: RagRun, evaluator: "EvaluationService") -> EvaluationTaskRead:

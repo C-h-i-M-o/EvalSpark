@@ -353,9 +353,9 @@ class FeedbackStatsService:
             statement = statement.where(EvaluationTask.user_id == target_owner_id)
         if actor_user_id is not None:
             statement = statement.where(UserFeedback.user_id == actor_user_id,
-                or_(EvaluationTask.task_type == "chat", EvaluationTask.user_id == actor_user_id))
+                or_(EvaluationTask.visibility == "public", EvaluationTask.user_id == actor_user_id))
         if viewer_id is not None:
-            statement = statement.where(or_(EvaluationTask.task_type == "chat", EvaluationTask.user_id == viewer_id))
+            statement = statement.where(or_(EvaluationTask.visibility == "public", EvaluationTask.user_id == viewer_id))
         rows = await db.execute(statement)
         return [self._interaction_record(row, content=None) for row in rows.all()]
 
@@ -383,9 +383,9 @@ class FeedbackStatsService:
             statement = statement.where(EvaluationTask.user_id == target_owner_id)
         if actor_user_id is not None:
             statement = statement.where(UserComment.user_id == actor_user_id,
-                or_(EvaluationTask.task_type == "chat", EvaluationTask.user_id == actor_user_id))
+                or_(EvaluationTask.visibility == "public", EvaluationTask.user_id == actor_user_id))
         if viewer_id is not None:
-            statement = statement.where(or_(EvaluationTask.task_type == "chat", EvaluationTask.user_id == viewer_id))
+            statement = statement.where(or_(EvaluationTask.visibility == "public", EvaluationTask.user_id == viewer_id))
         rows = await db.execute(statement)
         return [self._interaction_record(row, content=row[-1], force_type="comment") for row in rows.all()]
 

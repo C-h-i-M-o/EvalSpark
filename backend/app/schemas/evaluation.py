@@ -19,14 +19,21 @@ class EvaluationTaskCreate(BaseModel):
     @model_validator(mode="after")
     def require_judge_model(self) -> "EvaluationTaskCreate":
         if self.task_type == "rag":
+            if "enable_thinking" not in self.model_fields_set:
+                self.enable_thinking = True
             if not self.knowledge_base_id or not self.enable_judge or self.judge_model_id is None:
                 raise ValueError("RAG 评测必须选择知识库并启用空闲评审模型")
             if not self.prompt.strip() or not self.model_ids or len(set(self.model_ids)) != len(self.model_ids):
                 raise ValueError("RAG 评测需要非空问题及不重复的候选模型")
-            self.visibility = "private"
+            if "visibility" not in self.model_fields_set:
+                self.visibility = "private"
         if self.enable_judge and self.judge_model_id in self.model_ids:
             raise ValueError("LLM 评审模型不能同时作为被测模型")
         return self
+
+
+class EvaluationTaskVisibilityUpdate(BaseModel):
+    visibility: Literal["public", "private"]
 
 
 ScoreStatus = Literal["scored", "judge_failed", "judge_unstable", "judge_disabled", "model_failed"]

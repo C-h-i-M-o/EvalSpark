@@ -6,7 +6,9 @@
 
 ## 当前状态
 
-V3 RAG 正在按 [需求规格与分阶段实施计划](docs/v3-rag-spec-plan.md) 开发。已有私有知识库/文档 API、四格式索引、逐模型检索回答、证据快照和三轮忠实度/引用联合评分；阶段 6 已接入 React `/knowledge-bases`、`/rag` 及历史类型筛选、引用与评分详情代码。当前设备内存不足且 Docker 已关闭，优先交付代码：阶段 5—6 新增测试、前端构建、浏览器验收、真实模型全链路与本地部署均待资源充足设备执行，不能视为通过。迁移 `20260902_01/02` 仅在隔离测试库验证，业务升级需先确认备份与恢复方案。Agent 工具评测与 AI 安全测试集将在 RAG 之后单独设计。
+RAG 评测支持选择公开或私有，公开任务供所有登录用户完整查看回答、评分和任务引用片段，源知识库与文件仍私有。普通历史入口为 `/history`，RAG 历史入口为 `/rag/history`，任务作者可在历史详情修改可见性。
+
+V3 RAG 已恢复开发，支持私有知识库、四格式索引、多模型检索回答、证据快照和三轮联合评分。管理员统一配置云端或本地 Embedding；最新实现、测试及迁移证据见 [合并计划](docs/v3-rag-spec-plan.md) 顶部。真实供应商效果和完整浏览器交互仍需验收。
 
 当前 **v2 版本开发已经结束并冻结**，后续不再继续推进语义分析、模型推荐、运行监控等新功能。React 前端已经完成对原 Vue 前端的功能替代，后续开发统一使用 `frontend/` React 技术栈；`vue-frontend/` 仅作为历史版本保留，用于必要时回看旧实现。
 
@@ -68,7 +70,7 @@ MultiChatEval/
 
 ## 快速开始
 
-当前资源不足设备不启动 Docker。V3 代码在资源充足设备的验收入口为 `scripts/verify-rag.ps1 -Mode unit` / `-Mode integration`（Linux/macOS 使用 `bash scripts/verify-rag.sh unit` / `integration`）。它们使用独立测试项目，不读取业务 `.env` 或升级业务库；范围与未执行清单见 [RAG 验收与交接](docs/v3-rag-spec-plan.md#11-验证命令与执行边界)。阶段 7 已编写测试及脚本，仅配置/语法/差异静态检查通过，完整测试仍未执行。
+Docker 已恢复运行。隔离验收入口支持 unit、api（不加载模型）和 integration（真实 TEI）；使用独立测试项目，不读取业务 .env。已运行结果和未覆盖范围见 [RAG 合并计划](docs/v3-rag-spec-plan.md)。
 
 下述默认开发栈命令会运行数据库迁移；已有业务数据升级前，必须先确认备份、恢复和对应迁移授权。
 
@@ -242,3 +244,10 @@ docker compose exec backend python -m app.scripts.create_admin --username admin
 项目不传递思考程度参数。如果某个供应商不支持 `thinking` 字段，对应模型会在回答摘要卡中显示失败，不影响其他模型继续返回。
 
 关闭思考模式时，后端确认发送的是嵌套字段 `thinking.type=disabled`，不是 `thinkingmode:disabled`。MiniMax 等部分 OpenAI-compatible 供应商即使收到该参数，也可能仍在返回内容中包含 `<think>` 或 reasoning 字段；前端会按当前规则默认展开展示这些内容。
+## V3 恢复开发说明（2026-09-09）
+
+Embedding 支持云端或独立本地服务，由管理员在 `/embedding-config` 维护全系统单一 Base URL、API Key、模型和维度配置；本地无鉴权服务可留空密钥。默认启动不加载内置 TEI，需要时显式启用 `local-embedding` profile。
+
+轻量联合验收：`./scripts/verify-rag.ps1 -Mode api` 或 `bash scripts/verify-rag.sh api`。使用隔离存储与确定性 HTTP 服务，不调用收费模型。最新开发计划、迁移及验证证据见 [V3 合并计划](docs/v3-rag-spec-plan.md) 顶部；历史冻结与延期说明不代表当前执行状态。
+
+模型与 Embedding 统一入口：管理员进入“系统设置 → 模型配置”，通过页签切换；RAG 与知识库位于“RAG 评测”分组。

@@ -1,5 +1,7 @@
 # API 说明
 
+> 当前状态（2026-09-09）：全局 Embedding API 与本地兼容接入已实现，业务库已备份并迁移，前后端已启动。本文阶段 1—7 的早期冻结/未执行描述为历史记录，最新验证及未覆盖范围以 docs/v3-rag-spec-plan.md 顶部为准。
+
 V3 阶段 7 不新增业务接口。`backend/tests/integration/test_rag_docker.py` 为现有知识库、评测流/一次性返回、历史、反馈、私有评论和管理员统计补充隔离联合用例，保留真实 Cookie 鉴权；仅收费模型调用指向测试容器假服务。入口见 `v3-rag-spec-plan.md` 第 11 节，当前用例尚未运行。测试假服务 `/v1/chat/completions` 不注册到业务 FastAPI，也不映射宿主机端口。
 
 ## V3 私有知识库管理（阶段 2）
@@ -14,11 +16,13 @@ V3 阶段 7 不新增业务接口。`backend/tests/integration/test_rag_docker.p
 {"taskType":"rag","knowledgeBaseId":1,"prompt":"报销需要哪些材料？","modelIds":[1,2],"judgeModelId":3,"enableJudge":true,"enableThinking":false,"visibility":"private"}
 ```
 
-RAG 必须选择本人 ready 且存在已索引文档的知识库、非空且不重复的可用候选模型、一个未参与回答的可用 Judge；必须启用 Judge，服务端强制 private。可选 conversationId 只能指向本人会话。流式响应头发出前检查额度、配置和知识库，鉴权失败/不可用库返回正常 HTTP 错误，不伪装成成功 NDJSON。
+RAG 必须选择本人 ready 且存在已索引文档的知识库、非空且不重复的可用候选模型、一个未参与回答的可用 Judge；必须启用 Judge，visibility 支持 public/private，省略时默认 private，思考模式省略时默认开启。可选 conversationId 只能指向本人会话。流式响应头发出前检查额度、配置和知识库，鉴权失败/不可用库返回正常 HTTP 错误，不伪装成成功 NDJSON。
 
 事件为：`task_started`（新增 taskType）、逐候选 `rag_stage`（rewriting/retrieving/answering/judging）、`rag_retrieval`（modelConfigId、rewrittenQuery、当前回答的 evidence）、原 `model_delta`、`model_answer_completed`、评分及落库后的 `model_response`、最后 `task_completed`。断开会取消并等待子协程退出后收尾；进程异常时由 Worker 关闭超过 60 分钟的任务，不重放模型。运行中已知用量可能尚未记入当日额度，整条链路终态单次入账。
 
-任务详情/列表新增 `taskType`；`GET /api/evaluation/tasks?taskType=rag` 按类型筛选，不传则保留混合分页。RAG 只有所有者可读/反馈/评论，管理员没有内容读取豁免，异常 public 字段也不会公开。管理员全局统计可包含无正文 RAG 汇总，互动明细排除他人的 RAG。
+任务详情/列表包含 `taskType`；`GET /api/evaluation/tasks?taskType=rag` 按类型筛选，不传则保留混合分页。普通与 RAG 公开任务均供所有登录用户读取完整回答、评分和任务证据快照，并可反馈/评论；私有任务仅作者可访问，管理员没有内容读取豁免。管理员互动明细仅返回公开或自己的任务内容。知识库本体和原始文档仍仅归属用户可访问。
+
+`PATCH /api/evaluation/tasks/{task_id}/visibility`：请求 `{"visibility":"public"}` 或 `{"visibility":"private"}`，返回更新后的完整任务详情。仅作者可修改；非作者或不存在任务统一 404，未登录 401，非法字段值 422。普通与 RAG 任务共用此接口，不重新评测或重复记账，已有任务不会批量改写。
 
 每个 RAG 回答新增 `rag` 明细（chat 为 null）：知识库 ID/名称、contentRevision、embeddingRevision、chunkSize/chunkOverlap、documentVersions、rewrittenQuery、evidence、stageUsage、externalTotalTokens、costByCurrency、hasUnknownUsage、judgeRuns、judgeAggregate、faithfulness/citationCorrectness/citationCompleteness、ragFinal/baseFinal、scoreVersion、failureStage/errorCode。证据含 label、documentId/documentName、chunkId/indexRevision、text、similarity、source，来自固定快照；S1 只属于当前回答，不能跨模型共用。
 
@@ -31,8 +35,8 @@ stageUsage 逐 rewrite/embed/generate/judge 记录 runIndex、status（pending/k
 ### React 调用约定（阶段 6，运行验收待执行）
 
 - `/knowledge-bases` 使用 Cookie 鉴权、分页列表与 5 秒串行轮询；切换库/分页/离开页面取消旧读取。原文件通过私有下载接口获取，不使用证据片段反推磁盘路径。上传采用浏览器 FormData 生成边界，每次一份，20,000,000 字节上限与后端一致。
-- `/rag` 强制私有和空闲 Judge，使用 AbortSignal 停止流式读取。停止或断流不承诺免计费，持久化状态到历史中刷新查看。界面提交前明确展示片段会发给回答模型与 Judge 的外部 API 风险提示。
-- 历史筛选通过 `taskType` 查询参数传输；RAG pending 使用 60 分钟超时边界，普通任务保留 2 分钟。私有 RAG 评论不显示“公开讨论”。
+- `/rag` 可选择公开/私有，默认私有，保留独立 Judge，使用 AbortSignal 停止流式读取。停止或断流不承诺免计费，持久化状态到历史中刷新查看。按用户要求移除资料发送提示、仅自己可见标签，提交按钮为“开始评测”。
+- `/history` 固定查询 `taskType=chat`，`/rag/history` 固定查询 `taskType=rag`；两页独立导航，作者在历史详情修改可见性。RAG pending 使用 60 分钟超时边界，普通任务保留 2 分钟。私有 RAG 评论不显示“公开讨论”。
 - 引用折叠项仅展开该回答证据快照，未知标签显示警告。评分/费用只格式化后端结果，不在浏览器重算公式；RAG Decimal 字符串显式转为显示数值，缺失显示破折号而不是 0。
 
 所有接口要求登录，只能操作自己的库和文档，管理员也不能读取他人私有内容。未登录 401、账号禁用 403、他人或不存在资源统一 404。领域错误结构为 `{"detail":{"code":"document_limit","message":"每个知识库最多保留 100 份未清理文档"}}`；请求字段错误仍使用 FastAPI 标准 422。分页为 `page=1&pageSize=20`，每页上限 100。
@@ -888,3 +892,20 @@ GET /api/admin/feedback-stats?range=30d&activityType=all&page=1&pageSize=20
 ```
 
 点赞和点踩明细的 `content` 为 `null`。历史匿名互动的 `userId` 为 0、`username` 为 `anonymous`。本次统计能力直接读取现有持久化数据，不新增数据库表或迁移。
+
+## 2026-09-09 全局 Embedding 配置
+
+管理员使用 `GET/PUT /api/admin/embedding-config` 读取/保存单一配置，`POST /api/admin/embedding-config/test` 测试连接；普通用户不能调用这些接口。登录用户 `GET /api/embedding-config` 仅返回 configured、enabled、modelName、dimensions、chunkUnit，不包含地址与密钥。
+
+保存/测试请求字段：version（读取时的版本号）、baseUrl、apiKey（可选；空字符串/省略保留）、clearApiKey（显式清除）、modelName、dimensions（校验返回维度）、queryPrefix、timeoutSeconds（1—300）、batchSize（1—16）、maxInputCharacters（2048—32768）、enabled。响应不返回 apiKey，只返回 hasApiKey。Base URL 必须为 HTTP(S)，不能包含账号、密码、查询或片段；最终请求路径是 `{baseUrl}/embeddings`，不自动追加 `/v1`，维度字段用于校验而非请求供应商自动降维。
+
+保存冲突返回 409：版本过期或存在活动索引/RAG 任务。地址、模型、维度、查询前缀变更要求所有已有文档的知识库重建；API Key 轮换不使索引失效。测试使用固定合成短句，不持久化配置。云端 Embedding 与本地独立服务均使用同一接口；只支持该兼容协议，不声称覆盖全部供应商专用 API。
+
+RAG `stageUsage` 新增 `externalEmbedding`（旧记录默认 false），兼容 API 返回的合法 usage 用于展示，缺失记 unknown。Embedding 尚不提供单价配置和费用估算，也不计入现有回答模型额度；API 模式整链费用标记为已知小计，不把未计价显示为免费。切块单位为字符，历史通过 `embeddingRevision` 的 `rag_chunks_api_` 前缀区分旧 Token 切分。
+
+## 2026-09-09 评测体验更新
+
+- 普通评测和 RAG 读取同一今日用量接口与每日账本；管理员返回真实 usedTokens，同时 unlimited=true、dailyLimit/remainingTokens=null。未知 Token 不伪造。
+- RAG 请求未提供 enableThinking 时默认为 true，显式 false 仍有效。普通评测默认行为保持不变。
+- RAG 禁止同一配置、以及供应商名和模型名均相同的重复配置互相评审；校验在创建任务和外部调用之前执行。
+- 管理员模型设置统一在 /models 的大模型、Embedding 两个页签；/embedding-config 兼容跳转 /models?tab=embedding，原 Embedding 管理 API 不变。

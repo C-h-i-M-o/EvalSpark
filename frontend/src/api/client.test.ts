@@ -23,6 +23,7 @@ import {
   submitResponseFeedback,
   testModelConfig,
   updateAdminUserStatus,
+  updateEvaluationTaskVisibility,
   updateModelConfig,
   updateUserQuota
 } from "./client";
@@ -41,6 +42,22 @@ function mockJsonResponse(body: unknown, init: ResponseInit = {}): Response {
 }
 
 describe("React 阶段一 API 客户端", () => {
+  test("历史可见性通过带登录态的 PATCH 保存，并保留权限错误", async () => {
+    const task = { taskId: 42, visibility: "public" };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(mockJsonResponse(task))
+      .mockResolvedValueOnce(mockJsonResponse({ detail: "任务不存在" }, { status: 404 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(updateEvaluationTaskVisibility(42, "public")).resolves.toEqual(task);
+    expect(fetchMock).toHaveBeenCalledWith("/api/evaluation/tasks/42/visibility", {
+      method: "PATCH",
+      credentials: "include",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ visibility: "public" })
+    });
+    await expect(updateEvaluationTaskVisibility(42, "private")).rejects.toMatchObject({ status: 404 });
+  });
   test("读取后端健康检查", async () => {
     const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse({ status: "ok" }));
     vi.stubGlobal("fetch", fetchMock);

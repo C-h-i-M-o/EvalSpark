@@ -173,6 +173,32 @@ services:
       RAG_TOKENIZER_TESTS: "1"
     command: ["python", "-m", "pytest", "-p", "no:cacheprovider", "tests/test_rag_documents.py", "tests/test_rag_lifecycle.py", "tests/test_rag_usage.py", "tests/integration/test_rag_docker.py", "-q"]
 
+  worker-api-test:
+    profiles: [api]
+    image: evalspark-rag-backend:test
+    environment: &api_environment
+      <<: *lifecycle_environment
+      RAG_EMBEDDING_URL: http://model-test:8080/v1
+    volumes:
+      - ./backend:/app:ro
+      - rag_test_documents:/test-documents
+    command: ["python", "-m", "celery", "-A", "app.worker:celery_app", "worker", "--loglevel=INFO", "--concurrency=1", "--prefetch-multiplier=1", "--queues=rag"]
+    mem_limit: 1g
+
+  api-runner:
+    <<: *backend_test
+    profiles: [api]
+    environment:
+      <<: *api_environment
+      RAG_INTEGRATION_TESTS: "1"
+      RAG_ACCEPTANCE_TESTS: "1"
+      RAG_API_TESTS: "1"
+    volumes:
+      - ./backend:/workspace/backend:ro
+      - ./docker:/workspace/docker:ro
+      - rag_test_documents:/test-documents
+    command: ["python", "-m", "pytest", "-p", "no:cacheprovider", "tests/integration/test_rag_docker.py", "-q"]
+
 volumes:
   rag_test_mysql:
   rag_test_vectors:

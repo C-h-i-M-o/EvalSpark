@@ -19,6 +19,7 @@ from app.schemas.evaluation import (
     EvaluationTaskCreate,
     EvaluationTaskListRead,
     EvaluationTaskRead,
+    EvaluationTaskVisibilityUpdate,
     FeedbackCreate,
     FeedbackToggleRead,
 )
@@ -104,6 +105,19 @@ async def get_evaluation_task(
 ) -> EvaluationTaskRead:
     try:
         return await evaluation_service.get_task(task_id, db, current_user.id)
+    except EvaluationTaskNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@router.patch("/tasks/{task_id}/visibility", response_model=EvaluationTaskRead)
+async def update_evaluation_visibility(
+    task_id: int,
+    payload: EvaluationTaskVisibilityUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> EvaluationTaskRead:
+    try:
+        return await evaluation_service.update_task_visibility(task_id, payload.visibility, db, current_user.id)
     except EvaluationTaskNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
 

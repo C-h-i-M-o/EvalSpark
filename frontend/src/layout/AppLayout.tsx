@@ -7,7 +7,7 @@ import logoUrl from "../assets/logo.png";
 import { useWorkspaceMotion } from "../animations/pageMotion";
 import { BRAND_LOGO_ALT, BRAND_NAME } from "../config/brand";
 import { useAuth } from "../features/auth/AuthContext";
-import { getVisibleNavigationItems } from "../features/navigation/navigation";
+import { getVisibleNavigationGroups } from "../features/navigation/navigation";
 
 export function AppLayout() {
   const auth = useAuth();
@@ -23,10 +23,21 @@ export function AppLayout() {
 
   const renderNav = () => (
     <nav className="side-nav" aria-label="业务导航">
-      {getVisibleNavigationItems(user).map((item) => (
-        <NavLink key={item.path} to={item.path} end={item.path === "/"} onClick={() => setMobileNavOpen(false)}>
-          {item.label}
+      {getVisibleNavigationGroups(user).map((group) => group.path ? (
+        <NavLink className="nav-top-link" key={group.key} to={group.path} onClick={() => setMobileNavOpen(false)}>
+          {group.label}
         </NavLink>
+      ) : (
+        <details className="nav-group" key={group.key} open={group.items.some((item) => location.pathname === item.path || (item.path !== "/" && location.pathname.startsWith(`${item.path}/`)))}>
+          <summary>{group.label}{group.key === "agent" ? <span className="nav-group-badge">后续</span> : null}</summary>
+          <div className="nav-group-items">
+          {group.items.length ? group.items.map((item) => (
+            <NavLink key={item.path} to={item.path} end onClick={() => setMobileNavOpen(false)}>
+              {item.label}
+            </NavLink>
+          )) : <span className="nav-placeholder">即将开放</span>}
+          </div>
+        </details>
       ))}
     </nav>
   );

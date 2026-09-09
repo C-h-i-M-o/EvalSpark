@@ -1,5 +1,5 @@
 ﻿param(
-    [ValidateSet('unit', 'integration')]
+    [ValidateSet('unit', 'integration', 'api')]
     [string]$Mode = 'unit'
 )
 
@@ -26,18 +26,28 @@ try {
         Invoke-TestCompose -Arguments @('run', '--rm', '--no-deps', 'unit-runner')
         Invoke-TestCompose -Arguments @('run', '--rm', '--no-deps', 'frontend-test')
         Invoke-TestCompose -Arguments @('run', '--rm', '--no-deps', 'frontend-test', 'pnpm', 'build')
+    } elseif ($Mode -eq 'api') {
+        Invoke-TestCompose -Arguments @('build', 'runner')
+        Invoke-TestCompose -Arguments @('--profile', 'api', '--profile', 'lifecycle', 'stop', 'worker-test', 'worker-api-test')
+        Invoke-TestCompose -Arguments @('up', '-d', '--wait', '--wait-timeout', '180', 'mysql-test')
+        Invoke-TestCompose -Arguments @('run', '--rm', '--no-deps', 'runner')
+        Invoke-TestCompose -Arguments @('--profile', 'lifecycle', 'up', '-d', '--wait', 'qdrant-test', 'redis-test', 'model-test')
+        Invoke-TestCompose -Arguments @('run', '--rm', '--no-deps', 'runner', 'python', 'tests/integration/configure_embedding.py', 'api')
+        Invoke-TestCompose -Arguments @('--profile', 'api', 'up', '-d', 'worker-api-test')
+        Invoke-TestCompose -Arguments @('run', '--rm', '--no-deps', 'api-runner')
     } else {
         & docker volume inspect evalspark_rag_model_cache --format '{{.Name}}' 2>$null
         if ($LASTEXITCODE -ne 0) {
             throw '缺少固定模型缓存卷。确认下载授权后运行 docker volume create evalspark_rag_model_cache，再重新验收。禁止删除或替换已有卷。'
         }
         Invoke-TestCompose -Arguments @('build', 'runner')
-        Invoke-TestCompose -Arguments @('--profile', 'lifecycle', 'stop', 'worker-test')
+        Invoke-TestCompose -Arguments @('--profile', 'api', '--profile', 'lifecycle', 'stop', 'worker-test', 'worker-api-test')
         Invoke-TestCompose -Arguments @('up', '-d', '--wait', '--wait-timeout', '180', 'mysql-test')
         # 先迁移测试库；不能在旧 schema 上启动 Worker 恢复循环。
         Invoke-TestCompose -Arguments @('run', '--rm', '--no-deps', 'runner')
         Invoke-TestCompose -Arguments @('--profile', 'lifecycle', 'up', '-d', '--wait', '--wait-timeout', '1800',
             'embedding-test', 'qdrant-test', 'redis-test', 'model-test')
+        Invoke-TestCompose -Arguments @('run', '--rm', '--no-deps', 'runner', 'python', 'tests/integration/configure_embedding.py', 'tei')
         Invoke-TestCompose -Arguments @('--profile', 'lifecycle', 'up', '-d', 'worker-test')
         Invoke-TestCompose -Arguments @('run', '--rm', '--no-deps', 'acceptance-runner')
     }

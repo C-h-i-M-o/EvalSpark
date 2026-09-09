@@ -38,9 +38,11 @@ def estimate_stage_cost(model: RagModelSnapshot, usage: ModelUsage) -> ModelCost
         cache_creation_price=model.price_cache_creation).estimate_cost_details(usage)
 
 
-def embedding_stage(input_tokens: int, latency_ms: int) -> RagStageUsage:
+def embedding_stage(input_tokens: int | None, latency_ms: int, *, external: bool = False) -> RagStageUsage:
+    if input_tokens is None:
+        return RagStageUsage(stage="embed", status="unknown", latency_ms=latency_ms, external_embedding=external)
     return RagStageUsage(stage="embed", status="known", input_tokens=input_tokens, output_tokens=0,
-        cache_hit_tokens=0, cache_creation_tokens=0, total_tokens=input_tokens, latency_ms=latency_ms)
+        cache_hit_tokens=0, cache_creation_tokens=0, total_tokens=input_tokens, latency_ms=latency_ms, external_embedding=external)
 
 
 def summarize_usage(stages: list[RagStageUsage]) -> RagUsageSummary:
@@ -52,6 +54,8 @@ def summarize_usage(stages: list[RagStageUsage]) -> RagUsageSummary:
             raise ValueError("存在重复的阶段用量")
         seen.add(key)
         if item.stage == "embed":
+            if item.status != "known" or item.external_embedding:
+                summary.has_unknown_usage = True
             continue
         if item.status != "known":
             summary.has_unknown_usage = True

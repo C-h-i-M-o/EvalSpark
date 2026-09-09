@@ -36,16 +36,16 @@ class TokenQuotaService:
 
     async def get_today_usage(self, db: AsyncSession, user: User) -> TokenUsageRead:
         usage_date = self.usage_date()
+        used_tokens, daily_limit = await self._usage_and_limit(db, user.id, usage_date)
         if user.role == "admin":
             return TokenUsageRead(
                 usageDate=usage_date,
-                usedTokens=0,
+                usedTokens=used_tokens,
                 dailyLimit=None,
                 remainingTokens=None,
                 unlimited=True,
             )
 
-        used_tokens, daily_limit = await self._usage_and_limit(db, user.id, usage_date)
         return TokenUsageRead(
             usageDate=usage_date,
             usedTokens=used_tokens,
@@ -95,7 +95,7 @@ class TokenQuotaService:
         """调用者在评分终态事务内调用；回答锁与唯一日志共同防止重复累计。"""
         response = await db.scalar(select(ModelResponse).join(EvaluationTask).where(
             ModelResponse.id == response_id, EvaluationTask.user_id == user_id,
-            EvaluationTask.task_type == "rag", EvaluationTask.visibility == "private",
+            EvaluationTask.task_type == "rag",
         ).with_for_update().execution_options(populate_existing=True))
         if response is None or response.status not in ("success", "failed"):
             raise ValueError("RAG 回答尚未结束或无权访问，不能汇总入账")

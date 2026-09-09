@@ -12,7 +12,7 @@ export function RagScoreSummary({ rag }: { rag: RagDetail }) {
 export function RagScoreDetails({ rag, score }: { rag: RagDetail; score: EvaluationScore }) {
   return <section className="rag-score-details" aria-label="RAG 评分与用量">
     <h4>RAG 联合评审</h4>
-    <p className="rag-note">知识库：{rag.knowledgeBaseName} · 内容版本 {rag.contentRevision} · 切块 {rag.chunkSize} / 重叠 {rag.chunkOverlap} Token</p>
+    <p className="rag-note">知识库：{rag.knowledgeBaseName} · 内容版本 {rag.contentRevision} · 切块 {rag.chunkSize} / 重叠 {rag.chunkOverlap} {rag.embeddingRevision.startsWith("rag_chunks_api_") ? "字符" : "Token"}</p>
     <details><summary>Embedding 模型版本</summary><code>{rag.embeddingRevision}</code></details>
     <p>{score.judgeComment || "评审尚未完成"} · 有效 {rag.judgeAggregate?.validRunCount ?? 0}/3 轮</p>
     {rag.failureStage && <p className="rag-error">失败阶段：{failureStageLabels[rag.failureStage]} · {rag.errorCode}</p>}
@@ -36,12 +36,12 @@ export function RagScoreDetails({ rag, score }: { rag: RagDetail; score: Evaluat
     <div className="rag-table-scroll"><table className="rag-table"><caption>改写、Embedding、回答与三轮 Judge</caption>
       <thead><tr><th>阶段/模型</th><th>输入/输出/缓存命中/缓存创建</th><th>总 Token</th><th>耗时</th><th>费用</th></tr></thead>
       <tbody>{rag.stageUsage.map((usage) => <tr key={`${usage.stage}-${usage.runIndex}`}>
-        <td>{usageStageLabels[usage.stage]}{usage.stage === "judge" ? ` ${usage.runIndex}` : ""}<small>{usage.model?.displayName ?? "私有 Qwen Embedding"}</small>
+        <td>{usageStageLabels[usage.stage]}{usage.stage === "judge" ? ` ${usage.runIndex}` : ""}<small>{usage.model?.displayName ?? "Embedding 服务"}</small>
           {usage.model && <details><summary>调用配置</summary><pre className="rag-evidence-text">{JSON.stringify(usage.model, null, 2)}</pre></details>}</td>
         <td>{formatRagNumber(usage.inputTokens, 0)} / {formatRagNumber(usage.outputTokens, 0)} / {formatRagNumber(usage.cacheHitTokens, 0)} / {formatRagNumber(usage.cacheCreationTokens, 0)}</td>
         <td>{usage.status === "known" ? formatRagNumber(usage.totalTokens, 0) : usage.status === "pending" ? "待返回" : "未知"}</td>
         <td>{formatRagNumber(usage.latencyMs, 0)} ms</td>
-        <td>{usage.stage === "embed" ? "本地，不计外部费用" : `${formatRagNumber(usage.estimatedCost, 6)} ${usage.model?.currency ?? ""}`}</td>
+        <td>{usage.stage === "embed" ? (usage.externalEmbedding ? "API 费用未计价" : "本地，不计外部费用") : `${formatRagNumber(usage.estimatedCost, 6)} ${usage.model?.currency ?? ""}`}</td>
       </tr>)}</tbody></table></div>
     <p className="rag-note">卡片顶部耗时、输出与成本仅代表回答生成阶段。不同币种分别汇总，Embedding 不计入外部额度。</p>
   </section>;

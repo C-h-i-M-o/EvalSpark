@@ -523,3 +523,31 @@ PowerShell 脚本不得使用 `Start-Process` 创建宿主机前后端进程；B
 2026-09-03：当前 Docker 已关闭，老大允许延期运行验证并优先交付代码；以上基线实测不能视为 V3 新功能验收通过。新入口为 `scripts/verify-rag.ps1` / `bash scripts/verify-rag.sh` 的 `unit`、`integration` 两档，详细顺序、模型缓存准备、保留卷停止命令与人工门禁只维护在 `v3-rag-spec-plan.md` 第 11 节。后端源码和测试所需根文件只读挂载，不挂载 Docker socket 或业务 `.env`；前端测试直接使用新构建镜像中的依赖/源码，不借用业务 node_modules。Vue 与宿主机 Python/Node/pnpm 不参与。
 
 测试项目固定 `evalspark-rag-test`，显式空环境文件 `docker/rag-test.env` 避免 Compose 自动加载业务配置；测试模型不连接外部上游，数据和端口隔离，只有固定模型缓存卷共享。脚本不会调用业务 `migrate`、业务启动脚本或任何清卷操作。完整档会先停止测试 Worker 以串行完成数据库故障回归，再启动索引组件；不停止业务服务。测试配置解析和 PowerShell 语法已检查，但 pytest/Vitest/构建/实际脚本执行/完整部署均未执行，暂不作可部署结论。
+
+## 2026-09-09 恢复开发
+
+Docker 已恢复运行，取消此前“保持 Docker 关闭”的当前限制；本地大模型不随默认启动加载。管理员在 `/embedding-config` 设置全局 Base URL、API Key、模型及维度。内置 TEI 使用 `docker compose --profile local-embedding up -d embedding` 显式启动，在管理页连接 `http://embedding:80/v1`；无鉴权可留空密钥。独立部署在 Windows 宿主机时，容器侧使用 `http://host.docker.internal:<端口>/v1`。云端填写供应商实际兼容地址；所有示例都需要服务自身支持 `/embeddings`。
+
+验收入口新增 `./scripts/verify-rag.ps1 -Mode api` / `bash scripts/verify-rag.sh api`：先独立 MySQL 回归，停止两种测试 Worker 后设置测试专用全局配置，再使用真实 Qdrant/Redis/Worker 与确定性 HTTP 服务验收。该档不挂载模型缓存、不启动 TEI、不访问收费模型。`unit` 保持断网单元与前端构建，`integration` 保留真实 TEI 验收；三档串行执行，保留测试卷。切换 api/integration 会显式调整独立测试库中的单例配置，不触碰业务库。
+
+实际测试结果与业务迁移状态统一见 `v3-rag-spec-plan.md` 顶部。真实浏览器、真实供应商语义质量及大规模性能另行记录。
+
+## 普通模型 TLS 故障修复（2026-09-09）
+
+需求与原因：普通模型连接测试、一次性和流式请求需要在当前企业网络中通过证书校验。实测 api.deepseek.com 的证书由 RGF Inspection 签发；该 CA 已在 Windows LocalMachine Root 信任库中，容器的 certifi 和系统 CA 均缺失。
+
+方案：仅为本机创建被 Git 排除的 docker-compose.override.yml 与 .local-certs/model-ca-bundle.pem。证书包由当前后端 certifi 公共根证书和 Windows 中已信任的 Inspection 公钥证书组成；通过只读挂载及 SSL_CERT_FILE 供普通模型 HTTPX 使用。保留证书链和主机名校验，不修改模型 API、数据库或密钥，不将企业证书写入公共镜像。重建镜像升级 certifi 后应同步重新生成证书包；离开企业网络可移除本机 override 并重建后端容器。Embedding 客户端使用 trust_env=False，本次环境变量方案不改变其行为。
+
+验收：先验证不携带密钥的 HTTPS 请求可完成 TLS，再通过现有连接测试服务和流式适配器各发一条短测试消息；只读模型配置，不持久化评测任务。最后确认业务健康与 Git 排除规则。
+
+实测结果：Inspection 的上级为 Windows 已信任的 RGF Shanghai 根证书，Windows X509Chain.Build 返回 True；证书包已包含该完整 CA 链。修复后无密钥 HTTPS 返回 401（TLS 已通过）；现有 test_config 返回 success=True、耗时 4132ms；真实 stream_chat 收到内容并正常完成。后端 healthy，前端代理 /api/health 返回 ok。未写入业务库、未更改密钥、未关闭 TLS 校验。企业 CA 和 override 均由 git check-ignore 确认排除。
+
+## 模型配置高级字段折叠修复（2026-09-09）
+
+问题：高级选项使用 Collapse 默认懒挂载，首次展开前 Base URL、超时和价格等字段未注册，validateFields 返回值遗漏这些字段，导致测试连接及保存缺少参数。
+
+方案与范围：ModelConfigsPage 的 advanced 项设置 forceRender，默认仍折叠。沿用现有预设值、校验与请求构建；不变更 API、数据库或其他交互，不改写页面已有方法。
+
+验收：使用真实 Ant Design Collapse/Form 渲染，验证高级面板首次折叠时即存在 Base URL、超时和价格字段，并保持 aria-expanded=false；修复前失败、修复后通过。执行前端测试与构建。
+
+验收结果：新增真实组件渲染回归测试修复前因缺少 baseUrl 字段失败，修复后通过；前端 16 个测试文件共 64 项全部通过，TypeScript 与 Vite 生产构建通过，目标差异检查通过。未执行登录后的浏览器点击验收，未写入业务模型配置。

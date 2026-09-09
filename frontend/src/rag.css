@@ -1,13 +1,13 @@
 .rag-page { display: grid; gap: 20px; min-width: 0; color: var(--color-ink); }
 .rag-page h2, .rag-page h3, .rag-page h4 { text-wrap: balance; margin-top: 0; }
 .rag-page h2 { margin-bottom: 8px; }
-.rag-page .page-head h2 { font-size: 2rem; }
 .rag-page .response-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); }
 .rag-page .response-card { min-width: 0; }
 .rag-page .response-head h3 { overflow-wrap: anywhere; }
 .rag-page p, .rag-evidence p, .rag-score-details p { overflow-wrap: anywhere; line-height: 1.65; }
-.rag-page .page-head p { margin: 0; }
-.rag-surface { padding: 24px; background: #fff; border: 1px solid #c8d3d1; border-radius: 12px; min-width: 0; }
+.rag-page .page-head p:not(.eyebrow) { margin: 8px 0 0; color: #526052; }
+.rag-surface { position: relative; padding: 24px; background: var(--color-panel); border: 1px solid rgba(23, 35, 42, 0.11); border-radius: 14px; box-shadow: 0 22px 58px rgba(23, 35, 42, 0.1); min-width: 0; }
+.rag-surface::before { position: absolute; inset: 0 12px auto; height: 4px; border-radius: 4px; background: linear-gradient(90deg, var(--color-primary), var(--color-gold), var(--color-coral)); content: ""; }
 .knowledge-layout { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); gap: 20px; align-items: start; }
 .knowledge-list { display: grid; gap: 8px; }
 .knowledge-item { display: grid; gap: 8px; padding: 14px; text-align: left; width: 100%; border: 1px solid transparent; background: transparent; border-radius: 8px; overflow-wrap: anywhere; }

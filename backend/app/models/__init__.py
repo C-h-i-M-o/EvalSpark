@@ -9,8 +9,10 @@ from app.models.token_usage import DailyUserTokenUsage, TokenUsageLog, UserToken
 from app.models.user import User
 from app.models.knowledge_base import KnowledgeBase, KnowledgeChunk, KnowledgeDocument, RagJob
 from app.models.rag import RagResponseDetail
+from app.models.embedding import EmbeddingConfig
 
 __all__ = [
+    "EmbeddingConfig",
     "KnowledgeBase",
     "KnowledgeChunk",
     "KnowledgeDocument",

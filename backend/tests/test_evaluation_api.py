@@ -149,6 +149,7 @@ def test_get_evaluation_task_returns_task_timestamps(monkeypatch: pytest.MonkeyP
     assert response.status_code == 200
     assert response.json() == {
         "taskId": 10,
+        "taskType": "chat",
         "status": "pending",
         "prompt": "历史问题",
             "createdAt": "2026-06-03T12:00:00",
@@ -197,6 +198,7 @@ def test_list_evaluation_tasks_returns_paginated_result(monkeypatch: pytest.Monk
         "items": [
             {
                 "taskId": 10,
+                "taskType": "chat",
                 "status": "completed",
                 "prompt": "历史问题",
                 "createdAt": "2026-06-03T12:00:00",
@@ -332,3 +334,26 @@ def test_delete_response_comment_returns_404_when_missing(monkeypatch: pytest.Mo
 
     assert response.status_code == 404
     assert response.json() == {"detail": "评论不存在"}
+
+
+def test_visibility_patch_passes_authenticated_owner_and_rejects_invalid_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+    async def update(task_id, visibility, db, user_id):
+        calls.append((task_id, visibility, user_id))
+        return EvaluationTaskRead(taskId=task_id, status="completed", prompt="问题", ownerId=user_id,
+                                  visibility=visibility, responses=[])
+    monkeypatch.setattr(evaluation_service, "update_task_visibility", update)
+    client = TestClient(app)
+    response = client.patch("/api/evaluation/tasks/12/visibility", json={"visibility": "private"})
+    assert response.status_code == 200 and response.json()["visibility"] == "private"
+    assert calls == [(12, "private", 7)]
+    assert client.patch("/api/evaluation/tasks/12/visibility", json={"visibility": "other"}).status_code == 422
+    assert len(calls) == 1
+
+
+def test_visibility_patch_hides_non_owned_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def denied(*args):
+        raise EvaluationTaskNotFoundError("评测任务不存在")
+    monkeypatch.setattr(evaluation_service, "update_task_visibility", denied)
+    response = TestClient(app).patch("/api/evaluation/tasks/12/visibility", json={"visibility": "public"})
+    assert response.status_code == 404

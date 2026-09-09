@@ -8,6 +8,7 @@ import os
 from collections.abc import AsyncIterator
 from decimal import Decimal, ROUND_HALF_UP
 from uuid import uuid4
+from pathlib import Path
 
 import httpx
 import pytest
@@ -38,7 +39,7 @@ def isolated_endpoints() -> None:
     assert os.environ.get("RAG_INTEGRATION_TESTS") == "1"
     database = make_url(settings.database_url)
     assert database.host == "mysql-test" and database.database == "multichateval_rag_test"
-    assert settings.rag_embedding_url.host == "embedding-test"
+    assert settings.rag_embedding_url.host == ("model-test" if os.environ.get("RAG_API_TESTS") == "1" else "embedding-test")
     assert settings.rag_qdrant_url.host == "qdrant-test"
     assert settings.rag_redis_url.host == "redis-test"
     assert str(settings.rag_documents_dir) == "/test-documents"
@@ -47,6 +48,14 @@ def isolated_endpoints() -> None:
 @pytest_asyncio.fixture
 async def api_clients(rag_users: tuple[int, int]) -> AsyncIterator[tuple[httpx.AsyncClient, httpx.AsyncClient]]:
     owner, admin = rag_users
+    if os.environ.get("RAG_API_TESTS") == "1":
+        from app.db.session import AsyncSessionLocal
+        from app.models.embedding import EmbeddingConfig
+        # 启动入口在 Worker 启动前设置测试配置，此处只验证，不在运行中切换模型。
+        async with AsyncSessionLocal() as db:
+            row = await db.get(EmbeddingConfig, 1)
+            assert row is not None
+            assert row.settings_json.get("model_name") == "embedding-test"
     # 不覆盖鉴权依赖；用测试密钥签名的 Cookie 经真实 JWT、用户状态与归属校验。
     async with (
         httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://api-test",
@@ -91,6 +100,38 @@ async def create_ready_library(client: httpx.AsyncClient, sessions: async_sessio
 
 
 @pytest.mark.asyncio
+async def test_api_embedding_indexes_four_formats_and_rebuilds(api_clients, rag_sessions, tmp_path: Path) -> None:
+    from docx import Document
+    from test_rag_documents import make_pdf
+    from app.services.rag.documents import MEDIA_TYPES
+    client, _ = api_clients
+    (tmp_path / "资料.txt").write_text("中文制度资料。" * 100, encoding="utf-8")
+    (tmp_path / "资料.md").write_text("# 中文指南\n\n" + "申请需要审批。" * 100, encoding="utf-8")
+    make_pdf(tmp_path / "资料.pdf")
+    word = Document()
+    word.add_paragraph("中文培训资料。" * 100)
+    word.save(tmp_path / "资料.docx")
+    created = await client.post("/api/knowledge-bases", json={"name": f"四格式_{uuid4().hex}"})
+    assert created.status_code == 201
+    kb_id = created.json()["id"]
+    for path in sorted(tmp_path.iterdir()):
+        upload = await client.post(f"/api/knowledge-bases/{kb_id}/documents", files={"file": (path.name, path.read_bytes(), MEDIA_TYPES[path.suffix])})
+        assert upload.status_code == 202
+        await wait_job(rag_sessions, upload.json()["jobId"], seconds=300)
+    current = (await client.get(f"/api/knowledge-bases/{kb_id}")).json()
+    assert current["available"] and current["documentCount"] == 4 and current["chunkCount"] >= 4
+    edited = await client.patch(f"/api/knowledge-bases/{kb_id}", json={"chunkSize": 256})
+    assert edited.status_code == 200 and edited.json()["status"] == "reindex_required"
+    rebuild = await client.post(f"/api/knowledge-bases/{kb_id}/reindex")
+    assert rebuild.status_code == 202
+    await wait_job(rag_sessions, rebuild.json()["jobId"], seconds=300)
+    assert (await client.get(f"/api/knowledge-bases/{kb_id}")).json()["available"]
+    removed = await client.delete(f"/api/knowledge-bases/{kb_id}")
+    assert removed.status_code == 202
+    await wait_job(rag_sessions, removed.json()["jobId"], seconds=300)
+
+
+@pytest.mark.asyncio
 async def test_scored_stream_is_private_accounted_and_keeps_deleted_evidence(
     api_clients: tuple[httpx.AsyncClient, httpx.AsyncClient], model_ids: dict[str, int],
     rag_sessions: async_sessionmaker[AsyncSession], rag_users: tuple[int, int],
@@ -124,7 +165,7 @@ async def test_scored_stream_is_private_accounted_and_keeps_deleted_evidence(
         assert response.score.final == float((Decimal(str(response.score.rule_final)) * Decimal("0.2")
             + Decimal("6.55")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
         # 2 次候选调用各 13 Token，3 次 Judge 各 24 Token；本地 Embedding 不重复扣额度。
-        assert detail.external_total_tokens == 98 and detail.has_unknown_usage is False
+        assert detail.external_total_tokens == 98 and detail.has_unknown_usage is (os.environ.get("RAG_API_TESTS") == "1")
         assert detail.cost_by_currency == {"CNY": Decimal("0.000032"), "USD": Decimal("0.000084")}
         assert len(detail.stage_usage) == 6 and all(item.status == "known" for item in detail.stage_usage)
         own = [(index, event) for index, event in enumerate(events) if event.get("modelConfigId") == response.model_config_id]

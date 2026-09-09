@@ -5,12 +5,12 @@ import { useNavigate } from "react-router-dom";
 
 import {
   ApiError,
-  getTodayTokenUsage,
   listAvailableModels,
   streamEvaluationTask,
   submitResponseFeedback
 } from "../api/client";
-import type { EvaluationTaskPayload, EvaluationVisibility, FeedbackType, TokenUsage } from "../api/client";
+import type { EvaluationTaskPayload, EvaluationVisibility, FeedbackType } from "../api/client";
+import { useTodayTokenUsage } from "../features/evaluation/useTodayTokenUsage";
 import { useResponseGridMotion } from "../animations/pageMotion";
 import { ModelResponseCard } from "../components/ModelResponseCard";
 import { useAuth } from "../features/auth/AuthContext";
@@ -41,11 +41,9 @@ export function EvaluationPage() {
   const [availableModels, setAvailableModels] = useState<AvailableModelConfig[]>([]);
   const [modelConfigLoading, setModelConfigLoading] = useState(false);
   const [modelConfigErrorMessage, setModelConfigErrorMessage] = useState("");
-  const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
-  const [tokenUsageLoading, setTokenUsageLoading] = useState(false);
-  const [tokenUsageErrorMessage, setTokenUsageErrorMessage] = useState("");
   const [taskState, setTaskState] = useState<EvaluationTaskState | null>(null);
   const [loading, setLoading] = useState(false);
+  const { tokenUsage, tokenUsageLoading, tokenUsageErrorMessage, loadTokenUsage } = useTodayTokenUsage(loading);
   const [errorMessage, setErrorMessage] = useState("");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [feedbackSubmittingIds, setFeedbackSubmittingIds] = useState<number[]>([]);
@@ -73,7 +71,6 @@ export function EvaluationPage() {
 
   useEffect(() => {
     void loadAvailableModels();
-    void loadTokenUsage();
   }, []);
 
   useEffect(() => {
@@ -113,18 +110,6 @@ export function EvaluationPage() {
       setModelConfigErrorMessage(getErrorMessage(error, "模型配置加载失败"));
     } finally {
       setModelConfigLoading(false);
-    }
-  }
-
-  async function loadTokenUsage(): Promise<void> {
-    setTokenUsageLoading(true);
-    setTokenUsageErrorMessage("");
-    try {
-      setTokenUsage(await getTodayTokenUsage());
-    } catch (error) {
-      setTokenUsageErrorMessage(getErrorMessage(error, "今日 Token 用量加载失败"));
-    } finally {
-      setTokenUsageLoading(false);
     }
   }
 

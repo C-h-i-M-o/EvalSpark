@@ -12,6 +12,7 @@ import {
   Switch,
   Table,
   Tag,
+  Tabs,
   message
 } from "antd";
 import type { TableColumnsType } from "antd";
@@ -25,6 +26,8 @@ import {
   updateModelConfig
 } from "../api/client";
 import type { ModelConfig, ModelConfigPayload } from "../api/client";
+import { EmbeddingConfigPage } from "./EmbeddingConfigPage";
+import { useModelSettingsTabs } from "../features/embedding/useModelSettingsTabs";
 
 const providerPresets = [
   { key: "deepseek", label: "DeepSeek", providerName: "deepseek", baseUrl: "https://api.deepseek.com", description: "DeepSeek 官方兼容接口" },
@@ -56,6 +59,22 @@ const emptyForm: ModelConfigFormValues = {
 };
 
 export function ModelConfigsPage() {
+  const tabs = useModelSettingsTabs();
+  return (
+    <section className="admin-page settings-page">
+      <Tabs
+        activeKey={tabs.activeKey}
+        onChange={tabs.changeTab}
+        items={[
+          { key: "models", label: "大模型配置", children: <ModelProvidersPanel /> },
+          { key: "embedding", label: "Embedding 配置", children: <EmbeddingConfigPage /> }
+        ]}
+      />
+    </section>
+  );
+}
+
+function ModelProvidersPanel() {
   const [form] = Form.useForm<ModelConfigFormValues>();
   const [configs, setConfigs] = useState<ModelConfig[]>([]);
   const [loading, setLoading] = useState(false);
@@ -304,6 +323,8 @@ export function ModelConfigsPage() {
               {
                 key: "advanced",
                 label: "高级选项",
+                // 折叠时也注册字段，确保校验和提交包含预设的高级参数。
+                forceRender: true,
                 children: (
                   <>
                     <Form.Item label="Base URL" name="baseUrl" rules={[{ required: true, message: "请填写 Base URL" }]}>

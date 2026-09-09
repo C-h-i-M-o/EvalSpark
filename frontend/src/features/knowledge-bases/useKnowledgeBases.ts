@@ -2,12 +2,20 @@ import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import { Form } from "antd";
 import * as api from "../../api/knowledgeBases";
-import { ApiError } from "../../api/client";
+import { ApiError, fetchJson } from "../../api/client";
 import { errorMessage } from "../rag/rag";
 import { DEFAULT_KNOWLEDGE_FORM, validateUpload } from "./knowledgeBases";
 import type { KnowledgeBase, KnowledgeBaseForm, KnowledgeDocument, PageResult } from "./types";
 
 export function useKnowledgeBases() {
+  const [chunkUnit, setChunkUnit] = useState("计数单位加载中");
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetchJson<{ chunkUnit: "characters" | "tokens" }>("/api/embedding-config", controller.signal)
+      .then((value) => { if (!controller.signal.aborted) setChunkUnit(value.chunkUnit === "characters" ? "字符" : "Token"); })
+      .catch(() => { if (!controller.signal.aborted) setChunkUnit("单位暂不可用"); });
+    return () => controller.abort();
+  }, []);
   const [form] = Form.useForm<KnowledgeBaseForm>();
   const [libraries, setLibraries] = useState<PageResult<KnowledgeBase>>({ items: [], total: 0, page: 1, pageSize: 100 });
   const [libraryPage, setLibraryPage] = useState(1);
@@ -118,7 +126,7 @@ export function useKnowledgeBases() {
     retry: () => act(() => api.retryDocument(document.knowledgeBaseId, document.id), "重试已受理，请等待状态更新。"),
     remove: () => act(() => api.deleteDocument(document.knowledgeBaseId, document.id), "删除已受理，历史评测中的证据快照仍保留。")
   }));
-  return { form, formMode, beginCreate, beginEdit, closeForm, save, libraries, libraryPage, setLibraryPage,
+  return { chunkUnit, form, formMode, beginCreate, beginEdit, closeForm, save, libraries, libraryPage, setLibraryPage,
     documentRows, documents, documentPage, setDocumentPage, selected, selectedId,
     libraryRows: libraries.items.map((library) => ({ ...library, select: () => selectLibrary(library.id) })),
     loading, busy, error, notice, refresh, upload, reindex, removeLibrary,

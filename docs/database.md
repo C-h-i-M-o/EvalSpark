@@ -1,5 +1,11 @@
 # 数据库设计
 
+## 2026-09-09 任务可见性更新
+
+复用 `evaluation_tasks.visibility` 存储普通与 RAG 的 public/private；RAG 创建时省略则默认 private。作者修改时按任务 ID 与 user_id 加行锁后更新现有字段，不新增表或迁移，不批量转换旧记录，不改回答、评分、用量与知识库所有权。公开读取包括已存储的证据快照，源文件仍私有。测试仅使用隔离数据，本轮不修改业务任务的可见性。
+
+> 当前状态（2026-09-09）：全局 Embedding API 与本地兼容接入已实现，业务库已备份并迁移，前后端已启动。本文阶段 1—7 的早期冻结/未执行描述为历史记录，最新验证及未覆盖范围以 docs/v3-rag-spec-plan.md 顶部为准。
+
 ## V3 阶段 2 增量迁移
 
 新增迁移 `20260902_01`，唯一父版本为 `20260705_03`。本阶段只在独立 `multichateval_rag_test` 验证，尚未应用到业务库。新外键使用 BIGINT，与既有 MySQL 主键对齐；不修改旧初始化 SQL 或历史迁移。
@@ -212,3 +218,13 @@ Docker 首次创建 `mysql_data` 时，`docker/mysql/init/001_schema.sql` 会创
 旧版 `user_feedback.comment` 中已有的非空内容会在 Alembic 迁移时复制到 `user_comments`，随后删除旧字段。
 
 demo-v1 旧匿名评论继续归属 `user_id = 0`。新评论写入当前登录用户 ID，只有评论作者可以删除。
+
+## 2026-09-09 全局 Embedding 数据变化
+
+迁移 `20260909_01`（前置 `20260902_02`）新增 `embedding_config`：id 固定 1、version 乐观锁版本、settings_json 服务端配置。迁移插入空对象，保留旧本地配置语义，不自动创建云端凭据。管理员保存锁定单例和知识库，在没有活动作业/RAG 任务时更新；索引语义变化递增各知识库 content_revision 并标记 reindex_required。
+
+API Key 沿用现有 `store_api_key` 的 `plain:` 服务端存储机制，当前没有新增静态加密能力；不得把数据库字段名理解为已加密。接口响应、普通用户状态与 RAG 快照均不包含凭据。
+
+兼容 API 的集合名为 `rag_chunks_api_` 加配置语义摘要，旧集合仍为 rag_chunks_v1。删除/重建清理该文档在历史受管集合中的向量，不删除集合或其他用户向量。RAG 历史 embedding_revision 保存集合标识。knowledge_chunks.token_count 保留既有列名：旧 TEI 模式为 Token 数，新 API 模式为字符数，只用于分块，不能用于推算账单；历史切分单位由回答配置标识区分。
+
+业务升级前备份与恢复要求见合并计划顶部，隔离测试成功不自动授权业务数据操作。

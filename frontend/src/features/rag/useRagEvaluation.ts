@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent, KeyboardEvent } from "react";
-import { getTodayTokenUsage, listAvailableModels, streamEvaluationTask, submitResponseFeedback } from "../../api/client";
-import type { FeedbackType, TokenUsage } from "../../api/client";
+import { listAvailableModels, streamEvaluationTask, submitResponseFeedback } from "../../api/client";
+import type { FeedbackType } from "../../api/client";
+import { useTodayTokenUsage } from "../evaluation/useTodayTokenUsage";
 import { listAllKnowledgeBases } from "../../api/knowledgeBases";
-import { applyFeedbackResult, createPendingResponses, createStreamEventBatcher, getIdleJudgeModels,
-  mergeStreamEvents, normalizeJudgeModelId } from "../evaluation/evaluation";
+import { applyFeedbackResult, createPendingResponses, createStreamEventBatcher,
+  mergeStreamEvents } from "../evaluation/evaluation";
 import type { StreamEventBatcher } from "../evaluation/evaluation";
 import type { AvailableModelConfig, EvaluationTaskState } from "../evaluation/types";
+import type { EvaluationVisibility } from "../../api/client";
 import type { KnowledgeBase } from "../knowledge-bases/types";
-import { buildRagPayload, errorMessage, stopRagState } from "./rag";
+import { buildRagPayload, errorMessage, getRagJudgeModels, stopRagState } from "./rag";
 
 export function useRagEvaluation() {
   const [models, setModels] = useState<AvailableModelConfig[]>([]);
@@ -17,10 +19,11 @@ export function useRagEvaluation() {
   const [modelIds, setModelIds] = useState<number[]>([]);
   const [judgeId, setJudgeId] = useState<number | null>(null);
   const [prompt, setPrompt] = useState("");
-  const [enableThinking, setEnableThinking] = useState(false);
-  const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
+  const [enableThinking, setEnableThinking] = useState(true);
+  const [visibility, setVisibility] = useState<EvaluationVisibility>("private");
   const [initialLoading, setInitialLoading] = useState(true);
   const [running, setRunning] = useState(false);
+  const { tokenUsage, tokenUsageErrorMessage, loadTokenUsage } = useTodayTokenUsage(running);
   const [task, setTask] = useState<EvaluationTaskState | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -38,10 +41,10 @@ export function useRagEvaluation() {
   useEffect(() => {
     const controller = new AbortController();
     setInitialLoading(true);
-    void Promise.all([listAvailableModels(controller.signal), listAllKnowledgeBases(controller.signal), getTodayTokenUsage(controller.signal)])
-      .then(([available, bases, quota]) => {
+    void Promise.all([listAvailableModels(controller.signal), listAllKnowledgeBases(controller.signal)])
+      .then(([available, bases]) => {
         if (controller.signal.aborted) return;
-        setModels(available); setLibraries(bases); setTokenUsage(quota);
+        setModels(available); setLibraries(bases);
         setLibraryId((current) => bases.some((base) => base.id === current) ? current : bases.find((base) => base.available)?.id ?? null);
         setModelIds((current) => {
           const retained = current.filter((id) => available.some((model) => model.id === id));
@@ -51,18 +54,21 @@ export function useRagEvaluation() {
       .finally(() => { if (!controller.signal.aborted) setInitialLoading(false); });
     return () => controller.abort();
   }, [revision]);
-  useEffect(() => { setJudgeId((current) => normalizeJudgeModelId(current, models, modelIds)); }, [models, modelIds]);
+  useEffect(() => {
+    const choices = getRagJudgeModels(models, modelIds);
+    setJudgeId((current) => choices.some((model) => model.id === current) ? current : choices[0]?.id ?? null);
+  }, [models, modelIds]);
   useEffect(() => {
     if (!running) return;
     const timer = setInterval(() => setElapsed((seconds) => seconds + 1), 1000);
     return () => clearInterval(timer);
   }, [running]);
   const library = libraries.find((value) => value.id === libraryId) ?? null;
-  const idleModels = getIdleJudgeModels(models, modelIds);
+  const idleModels = getRagJudgeModels(models, modelIds);
   const quotaExhausted = tokenUsage !== null && !tokenUsage.unlimited && tokenUsage.remainingTokens === 0;
   const canSubmit = !initialLoading && !running && !!prompt.trim() && !!library?.available && library.status === "ready"
     && modelIds.length > 0 && judgeId !== null && idleModels.some((model) => model.id === judgeId) && !quotaExhausted;
-  function refresh() { if (!runningRef.current) { setError(""); setRevision((value) => value + 1); } }
+  function refresh() { if (!runningRef.current) { setError(""); setRevision((value) => value + 1); void loadTokenUsage(); } }
   function selectLibrary(value: number) {
     // 切换任务上下文时立即丢弃旧批次；即使网络稍后返回，也不能覆盖新选择。
     runVersion.current += 1; abort.current?.abort(); batcher.current?.clear();
@@ -72,11 +78,11 @@ export function useRagEvaluation() {
   function cancel() { abort.current?.abort(); setNotice("已请求停止。已发生的调用仍可能计费，最终收尾状态请在历史任务中查看。"); }
   async function submit() {
     if (!canSubmit || runningRef.current) return;
-    const payload = buildRagPayload({ prompt, library, modelIds, judgeModelId: judgeId, enableThinking });
+    const payload = buildRagPayload({ prompt, library, modelIds, judgeModelId: judgeId, enableThinking, visibility });
     const version = ++runVersion.current;
     const controller = new AbortController(); abort.current = controller;
     runningRef.current = true; setRunning(true); setElapsed(0); setError(""); setNotice("");
-    setTask({ taskId: null, taskType: "rag", status: "running", prompt, visibility: "private", responses: createPendingResponses(modelIds, models) });
+    setTask({ taskId: null, taskType: "rag", status: "running", prompt, visibility, responses: createPendingResponses(modelIds, models) });
     const events = createStreamEventBatcher((values) => {
       if (mounted.current && version === runVersion.current) setTask((current) => mergeStreamEvents(current, values));
     });
@@ -98,6 +104,7 @@ export function useRagEvaluation() {
       events.flush();
       if (mounted.current && version === runVersion.current) {
         runningRef.current = false; setRunning(false); setRevision((value) => value + 1);
+        void loadTokenUsage();
       }
     }
   }
@@ -121,6 +128,6 @@ export function useRagEvaluation() {
       current.includes(model.id) ? current.filter((id) => id !== model.id) : [...current, model.id]) })),
     idleOptions: idleModels.map((model) => ({ value: model.id, label: model.displayName })),
     libraryOptions: libraries.map((base) => ({ value: base.id, label: `${base.name}${base.available ? "" : "（未就绪）"}`, disabled: !base.available })),
-    enableThinking, setEnableThinking, tokenUsage, quotaExhausted, initialLoading, running, task, error, notice, elapsed,
+    enableThinking, setEnableThinking, visibility, setVisibility, tokenUsage, quotaExhausted, initialLoading, running, task, error: error || tokenUsageErrorMessage, notice, elapsed,
     feedbackIds, feedback, canSubmit, submit, cancel, refresh };
 }

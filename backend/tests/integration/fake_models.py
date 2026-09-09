@@ -10,6 +10,21 @@ from pydantic import BaseModel, Field, StrictBool
 app = FastAPI(title="RAG 隔离验收假模型")
 
 
+class EmbeddingRequest(BaseModel):
+    model: Literal["embedding-test"]
+    input: list[str] = Field(min_length=1, max_length=16)
+    encoding_format: Literal["float"]
+
+
+@app.post("/v1/embeddings")
+async def embed(payload: EmbeddingRequest, authorization: Annotated[str | None, Header()] = None) -> dict[str, object]:
+    if authorization != "Bearer rag-acceptance-only":
+        raise HTTPException(401, "只接受隔离验收凭据")
+    # 确定性非零向量用于验证协议、存储与归属；不代表真实检索语义质量。
+    return {"data": [{"index": index, "embedding": [1.0, 0.5, 0.25]} for index in reversed(range(len(payload.input)))],
+        "usage": {"prompt_tokens": 5 * len(payload.input), "total_tokens": 5 * len(payload.input)}}
+
+
 class Message(BaseModel):
     role: Literal["system", "user"]
     content: str = Field(min_length=1)

@@ -1,16 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
-import { getEvaluationTask, listEvaluationTasks, submitResponseFeedback } from "../../api/client";
-import type { FeedbackType } from "../../api/client";
+import { getEvaluationTask, listEvaluationTasks, submitResponseFeedback, updateEvaluationTaskVisibility } from "../../api/client";
+import type { EvaluationVisibility, FeedbackType } from "../../api/client";
+import { useAuth } from "../auth/AuthContext";
 import type { EvaluationTaskListRead, EvaluationTaskRead } from "../evaluation/types";
 import { errorMessage } from "../rag/rag";
 import { updateTaskResponseFeedback } from "./history";
 
-export function useHistory() {
+export function useHistory(taskType: "chat" | "rag") {
+  const { user } = useAuth();
   const [listing, setListing] = useState<EvaluationTaskListRead>({ items: [], total: 0, page: 1, pageSize: 10 });
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const [taskType, setTaskType] = useState<"all" | "chat" | "rag">("all");
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [selectedTask, setSelectedTask] = useState<EvaluationTaskRead | null>(null);
   const [loading, setLoading] = useState(false);
@@ -18,12 +19,14 @@ export function useHistory() {
   const [error, setError] = useState("");
   const [feedbackIds, setFeedbackIds] = useState<number[]>([]);
   const [revision, setRevision] = useState(0);
+  const [visibilitySaving, setVisibilitySaving] = useState(false);
+  const visibilityPending = useRef(false);
   const detailAbort = useRef<AbortController | null>(null);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
     const controller = new AbortController(); setLoading(true); setError("");
-    void listEvaluationTasks({ page, pageSize, ...(taskType === "all" ? {} : { taskType }) }, controller.signal)
+    void listEvaluationTasks({ page, pageSize, taskType }, controller.signal)
       .then((result) => { if (!controller.signal.aborted) setListing(result); })
       .catch((caught: unknown) => { if (!controller.signal.aborted) setError(errorMessage(caught)); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
@@ -34,13 +37,25 @@ export function useHistory() {
     const controller = new AbortController(); detailAbort.current = controller; setDetailLoading(true);
     void getEvaluationTask(selectedId, controller.signal)
       .then((task) => { if (!controller.signal.aborted) setSelectedTask(task); })
-      .catch((caught: unknown) => { if (!controller.signal.aborted) setError(errorMessage(caught)); })
+      .catch((caught: unknown) => { if (!controller.signal.aborted) { setSelectedTask(null); setError(errorMessage(caught)); } })
       .finally(() => { if (!controller.signal.aborted) setDetailLoading(false); });
     return () => controller.abort();
   }, [selectedId, revision]);
   function refresh() { setRevision((value) => value + 1); }
-  function changeType(value: "all" | "chat" | "rag") {
-    detailAbort.current?.abort(); setTaskType(value); setPage(1); setSelectedId(null); setSelectedTask(null);
+  async function changeVisibility(visibility: EvaluationVisibility) {
+    if (!selectedTask || selectedTask.ownerId !== user?.id || visibilityPending.current || detailLoading) return;
+    const taskId = selectedTask.taskId;
+    visibilityPending.current = true;
+    setVisibilitySaving(true); setError("");
+    detailAbort.current?.abort();
+    try {
+      const updated = await updateEvaluationTaskVisibility(taskId, visibility);
+      if (mounted.current) {
+        setSelectedTask((current) => current?.taskId === taskId ? updated : current);
+        setRevision((value) => value + 1);
+      }
+    } catch (caught) { if (mounted.current) setError(errorMessage(caught)); }
+    finally { visibilityPending.current = false; if (mounted.current) setVisibilitySaving(false); }
   }
   function selectTask(id: number) { detailAbort.current?.abort(); setSelectedId(id); setSelectedTask(null); refresh(); }
   function changePageSize(event: ChangeEvent<HTMLSelectElement>) { setPageSize(Number(event.target.value)); setPage(1); }
@@ -55,8 +70,9 @@ export function useHistory() {
     } catch (caught) { if (mounted.current) setError(errorMessage(caught)); }
     finally { if (mounted.current) setFeedbackIds((ids) => ids.filter((id) => id !== responseId)); }
   }
-  return { listing, page, pageSize, taskType, changeType, selectedTask, loading, detailLoading, error, feedbackIds,
-    refresh, changePageSize, previousPage, nextPage, submitFeedback, totalPages: Math.max(Math.ceil(listing.total / pageSize), 1),
+  return { listing, page, pageSize, taskType, selectedTask, loading, detailLoading, error, feedbackIds, visibilitySaving,
+    refresh, changePageSize, previousPage, nextPage, submitFeedback, changeVisibility, canChangeVisibility: selectedTask?.ownerId === user?.id,
+    totalPages: Math.max(Math.ceil(listing.total / pageSize), 1),
     selectedStatus: selectedTask ?? listing.items.find((item) => item.taskId === selectedId),
     rows: listing.items.map((item) => ({ ...item, select: () => selectTask(item.taskId) })) };
 }

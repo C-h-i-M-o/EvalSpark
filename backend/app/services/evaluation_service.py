@@ -6,7 +6,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import httpx
-from sqlalchemy import Select, and_, func, or_, select
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -229,6 +229,17 @@ class EvaluationService:
 
         return self._serialize_task(task, user_id)
 
+    async def update_task_visibility(self, task_id: int, visibility: str, db: AsyncSession, user_id: int) -> EvaluationTaskRead:
+        # 只锁当前作者的任务；公开只影响阅读权限，不授予修改权限。
+        task = await db.scalar(select(EvaluationTask).where(
+            EvaluationTask.id == task_id, EvaluationTask.user_id == user_id,
+        ).with_for_update().execution_options(populate_existing=True))
+        if task is None:
+            raise EvaluationTaskNotFoundError("评测任务不存在")
+        task.visibility = visibility
+        await db.commit()
+        return await self.get_task(task_id, db, user_id)
+
     async def toggle_response_feedback(
         self,
         response_id: int,
@@ -370,7 +381,7 @@ class EvaluationService:
             .join(EvaluationTask, EvaluationTask.id == ModelResponse.task_id).where(
                 UserComment.id == comment_id,
                 UserComment.user_id == user_id,
-                or_(EvaluationTask.task_type == "chat", EvaluationTask.user_id == user_id),
+                self._task_access_condition(user_id),
             )
         )
         comment = result.scalar_one_or_none()
@@ -1177,7 +1188,7 @@ class EvaluationService:
 
     def _task_access_condition(self, user_id: int) -> object:
         return or_(
-            and_(EvaluationTask.visibility == "public", EvaluationTask.task_type == "chat"),
+            EvaluationTask.visibility == "public",
             EvaluationTask.user_id == user_id,
         )
 

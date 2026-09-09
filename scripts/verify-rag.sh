@@ -2,8 +2,8 @@
 set -euo pipefail
 
 mode="${1:-unit}"
-if [[ "$mode" != unit && "$mode" != integration ]] || [[ $# -gt 1 ]]; then
-  echo '用法：bash scripts/verify-rag.sh [unit|integration]' >&2
+if [[ "$mode" != unit && "$mode" != integration && "$mode" != api ]] || [[ $# -gt 1 ]]; then
+  echo '用法：bash scripts/verify-rag.sh [unit|integration|api]' >&2
   exit 2
 fi
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -23,17 +23,27 @@ if [[ "$mode" == unit ]]; then
   "${compose[@]}" run --rm --no-deps unit-runner
   "${compose[@]}" run --rm --no-deps frontend-test
   "${compose[@]}" run --rm --no-deps frontend-test pnpm build
+elif [[ "$mode" == api ]]; then
+  "${compose[@]}" build runner
+  "${compose[@]}" --profile api --profile lifecycle stop worker-test worker-api-test
+  "${compose[@]}" up -d --wait --wait-timeout 180 mysql-test
+  "${compose[@]}" run --rm --no-deps runner
+  "${compose[@]}" --profile lifecycle up -d --wait qdrant-test redis-test model-test
+  "${compose[@]}" run --rm --no-deps runner python tests/integration/configure_embedding.py api
+  "${compose[@]}" --profile api up -d worker-api-test
+  "${compose[@]}" run --rm --no-deps api-runner
 else
   if ! docker volume inspect evalspark_rag_model_cache --format '{{.Name}}' >/dev/null 2>&1; then
     echo '缺少固定模型缓存卷。确认下载授权后运行 docker volume create evalspark_rag_model_cache，再重新验收。禁止删除或替换已有卷。' >&2
     exit 1
   fi
   "${compose[@]}" build runner
-  "${compose[@]}" --profile lifecycle stop worker-test
+  "${compose[@]}" --profile api --profile lifecycle stop worker-test worker-api-test
   "${compose[@]}" up -d --wait --wait-timeout 180 mysql-test
   # 先迁移测试库；不能在旧 schema 上启动 Worker 恢复循环。
   "${compose[@]}" run --rm --no-deps runner
   "${compose[@]}" --profile lifecycle up -d --wait --wait-timeout 1800 embedding-test qdrant-test redis-test model-test
+  "${compose[@]}" run --rm --no-deps runner python tests/integration/configure_embedding.py tei
   "${compose[@]}" --profile lifecycle up -d worker-test
   "${compose[@]}" run --rm --no-deps acceptance-runner
 fi

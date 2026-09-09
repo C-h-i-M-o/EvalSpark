@@ -40,7 +40,7 @@ async def _run_job(job_id: str) -> None:
     engine = create_async_engine(settings.database_url, pool_pre_ping=True)
     vectors = AsyncQdrantClient(url=str(settings.rag_qdrant_url), timeout=settings.rag_embedding_timeout_seconds, check_compatibility=False, trust_env=False)
     try:
-        await IndexRunner(async_sessionmaker(engine, expire_on_commit=False), vectors=VectorStore(vectors), embedding=EmbeddingClient()).run(job_id)
+        await IndexRunner(async_sessionmaker(engine, expire_on_commit=False), vectors=VectorStore(vectors), embedding=EmbeddingClient(), resolve_config=True).run(job_id)
     finally:
         await vectors.close()
         await engine.dispose()

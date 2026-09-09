@@ -1,22 +1,28 @@
 import { parseThinkContent } from "../evaluation/content";
-import type { DisplayModelResponse, EvaluationTaskState } from "../evaluation/types";
+import type { AvailableModelConfig, DisplayModelResponse, EvaluationTaskState } from "../evaluation/types";
+import type { EvaluationVisibility } from "../../api/client";
 import type { KnowledgeBase, SourceLocation } from "../knowledge-bases/types";
 import type { RagDecimal, RagEvaluationPayload, RagStage, RagStreamEvent } from "./types";
 
 export const ragStageLabels: Record<RagStage, string> = { rewriting: "改写查询", retrieving: "检索资料", answering: "生成回答", judging: "三轮联合评审" };
-export const RAG_EXTERNAL_NOTICE = "检索片段将发送给所选回答模型与评审模型；若使用外部 API，片段将离开本地部署环境。";
 export const RAG_DELETE_NOTICE = "删除后不可再检索该文档；已完成评测中的引用片段仍会保留。";
+export function getRagJudgeModels(models: AvailableModelConfig[], selectedIds: number[]): AvailableModelConfig[] {
+  const candidates = models.filter((model) => selectedIds.includes(model.id));
+  // 不同配置 ID 也可能指向同一供应商的同一模型。
+  return models.filter((judge) => !candidates.some((model) => model.id === judge.id ||
+    (model.providerName === judge.providerName && model.modelName === judge.modelName)));
+}
 export function buildRagPayload(options: { prompt: string; library: KnowledgeBase | null; modelIds: number[];
-  judgeModelId: number | null; enableThinking: boolean }): RagEvaluationPayload {
+  judgeModelId: number | null; enableThinking: boolean; visibility?: EvaluationVisibility }): RagEvaluationPayload {
   if (!options.library?.available || options.library.status !== "ready") throw new Error("请选择已就绪且有可检索文档的知识库");
   if (!options.prompt.trim() || !options.modelIds.length || new Set(options.modelIds).size !== options.modelIds.length) throw new Error("请填写问题并选择不重复的候选模型");
-  if (options.judgeModelId === null || options.modelIds.includes(options.judgeModelId)) throw new Error("请为三轮评审保留一个空闲模型");
+  if (options.judgeModelId === null || options.modelIds.includes(options.judgeModelId)) throw new Error("请为三轮评审保留一个不同的模型");
   return { taskType: "rag", knowledgeBaseId: options.library.id, prompt: options.prompt, modelIds: options.modelIds,
-    judgeModelId: options.judgeModelId, enableJudge: true, enableThinking: options.enableThinking, visibility: "private" };
+    judgeModelId: options.judgeModelId, enableJudge: true, enableThinking: options.enableThinking, visibility: options.visibility ?? "private" };
 }
 export function mergeRagStage(state: EvaluationTaskState | null, event: RagStreamEvent): EvaluationTaskState {
   const current = state ?? { taskId: null, status: "running", prompt: "", responses: [] };
-  return { ...current, taskType: "rag", visibility: "private", responses: current.responses.map((response) =>
+  return { ...current, taskType: "rag", responses: current.responses.map((response) =>
     response.modelConfigId !== event.modelConfigId ? response : { ...response,
       ...(event.type === "rag_stage" ? { ragStage: event.stage } : { ragRetrieval: { rewrittenQuery: event.rewrittenQuery, evidence: event.evidence } }) }) };
 }

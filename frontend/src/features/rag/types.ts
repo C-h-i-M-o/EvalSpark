@@ -1,4 +1,4 @@
-import type { EvaluationTaskPayload } from "../../api/client";
+import type { EvaluationTaskPayload, EvaluationVisibility } from "../../api/client";
 import type { SourceLocation } from "../knowledge-bases/types";
 
 // 后端 Decimal 在 RAG JSON 中以字符串传输，转换只用于显示，不在前端重算基础分。
@@ -20,6 +20,7 @@ export interface RagModelSnapshot {
 }
 export interface RagStageUsage {
   stage: "rewrite" | "embed" | "generate" | "judge"; runIndex: number; status: "pending" | "known" | "unknown";
+  externalEmbedding?: boolean;
   model: RagModelSnapshot | null; inputTokens: number | null; outputTokens: number | null;
   cacheHitTokens: number | null; cacheCreationTokens: number | null; totalTokens: number | null;
   latencyMs: number | null; estimatedCost: RagDecimal | null;
@@ -54,5 +55,5 @@ export interface RagDetail {
   errorCode: string | null;
 }
 export interface RagEvaluationPayload extends EvaluationTaskPayload {
-  taskType: "rag"; knowledgeBaseId: number; judgeModelId: number; enableJudge: true; visibility: "private";
+  taskType: "rag"; knowledgeBaseId: number; judgeModelId: number; enableJudge: true; visibility: EvaluationVisibility;
 }

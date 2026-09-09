@@ -1,10 +1,12 @@
 from decimal import Decimal
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
+from app.services.embedding_config_service import get_config, runtime_config
 from app.db.session import AsyncSessionLocal
 from app.adapters.base import ModelUsage
 from app.models.evaluation import EvaluationResult, EvaluationTask
@@ -52,10 +54,11 @@ class RagEvaluationStore:
 
     async def create(self, user_id: int, knowledge_base_id: int, prompt: str,
                      models: list[RuntimeModelConfig], *, enable_thinking: bool,
-                     conversation_id: int | None = None) -> tuple[RagTaskContext, list[PreparedRagResponse]]:
+                     conversation_id: int | None = None, visibility: Literal["public", "private"] = "private") -> tuple[RagTaskContext, list[PreparedRagResponse]]:
         if not models or len({model.id for model in models}) != len(models):
             raise RagClientError("rag_invalid_models", "请选择不重复的候选模型")
         async with self.sessions() as db, db.begin():
+            embedding_runtime = runtime_config(await get_config(db, lock=True))
             if conversation_id is not None and await db.scalar(select(Conversation.id).where(
                 Conversation.id == conversation_id, Conversation.user_id == user_id)) is None:
                 raise KnowledgeBaseError("conversation_not_found", "会话不存在或无权访问", 404)
@@ -63,11 +66,12 @@ class RagEvaluationStore:
             versions = await self._versions(db, user_id, kb.id)
             if kb.status != "ready" or not versions:
                 raise KnowledgeBaseError("knowledge_base_not_ready", "知识库尚未就绪或没有可检索内容")
-            task = EvaluationTask(user_id=user_id, prompt=prompt, task_type="rag", visibility="private",
+            task = EvaluationTask(user_id=user_id, prompt=prompt, task_type="rag", visibility=visibility,
                                   conversation_id=conversation_id, status="pending")
             db.add(task)
             await db.flush()
             context = RagTaskContext(task_id=task.id, user_id=user_id, knowledge_base_id=kb.id,
+                embedding_runtime=embedding_runtime,
                 content_revision=kb.content_revision, document_versions=versions, prompt=prompt,
                 enable_thinking=enable_thinking)
             prepared: list[PreparedRagResponse] = []
@@ -77,7 +81,7 @@ class RagEvaluationStore:
                 db.add(response)
                 await db.flush()
                 db.add(RagResponseDetail(response_id=response.id, knowledge_base_id=kb.id, knowledge_base_name=kb.name,
-                    content_revision=kb.content_revision, embedding_revision=settings.rag_embedding_revision,
+                    content_revision=kb.content_revision, embedding_revision=embedding_runtime.rag_embedding_collection if embedding_runtime.rag_embedding_protocol == "openai" else settings.rag_embedding_revision,
                     chunk_size=kb.chunk_size, chunk_overlap=kb.chunk_overlap,
                     document_versions_json=[{"documentId": document, "indexRevision": revision} for document, revision in versions]))
                 prepared.append(PreparedRagResponse(response_id=response.id, model_config_id=model.id))
@@ -93,7 +97,7 @@ class RagEvaluationStore:
     async def _owned_response(self, db: AsyncSession, context: RagTaskContext,
                               response_id: int, *, allow_expired: bool = False) -> tuple[ModelResponse, RagResponseDetail]:
         task = await db.scalar(select(EvaluationTask).where(EvaluationTask.id == context.task_id,
-            EvaluationTask.user_id == context.user_id, EvaluationTask.task_type == "rag", EvaluationTask.visibility == "private")
+            EvaluationTask.user_id == context.user_id, EvaluationTask.task_type == "rag")
             .with_for_update().execution_options(populate_existing=True))
         if task is None:
             raise RagClientError("rag_response_not_found", "评测回答不存在或无权访问")
@@ -201,8 +205,7 @@ class RagEvaluationStore:
         """在调用方确认本任务已停止后收尾；仅记账，不重放任何模型请求。"""
         async with self.sessions() as db, db.begin():
             task = await db.scalar(select(EvaluationTask).where(EvaluationTask.id == context.task_id,
-                EvaluationTask.user_id == context.user_id, EvaluationTask.task_type == "rag",
-                EvaluationTask.visibility == "private").with_for_update())
+                EvaluationTask.user_id == context.user_id, EvaluationTask.task_type == "rag").with_for_update())
             if task is None:
                 raise RagClientError("rag_task_not_found", "评测任务不存在或无权访问")
             if task.status in ("completed", "failed"):
@@ -240,7 +243,7 @@ class RagEvaluationStore:
         cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=RAG_STALE_SECONDS)
         async with self.sessions() as db:
             tasks = list((await db.scalars(select(EvaluationTask).where(
-                EvaluationTask.task_type == "rag", EvaluationTask.visibility == "private",
+                EvaluationTask.task_type == "rag",
                 EvaluationTask.status == "pending", EvaluationTask.created_at < cutoff,
             ).order_by(EvaluationTask.id).limit(limit))).all())
             contexts: list[RagTaskContext] = []

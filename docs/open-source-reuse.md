@@ -59,3 +59,7 @@ FastChat 提供多模型聊天和 Chatbot Arena 相关实践，适合参考多�
 ```
 
 这样更容易控制范围，也更能体现课程设计中的系统分析、数据库设计、接口设计和工程实现能力。
+
+## Embedding 兼容接入（2026-09-09）
+
+继续复用 httpx、Qdrant 客户端和 semantic-text-splitter，不增加供应商专用 SDK。云端模式使用开源切分器的字符切分能力，避免为分块加载 Embedding 模型。协议按 [OpenAI Embeddings API](https://developers.openai.com/api/reference/resources/embeddings/methods/create) 核对 input/model、float 向量、data.index 和 usage 字段；不自动假设每家供应商支持可选 dimensions 参数。

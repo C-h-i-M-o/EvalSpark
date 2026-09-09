@@ -83,6 +83,7 @@ services:
 
   # 固定 CPU 镜像及模型提交；模型缓存仅由 TEI 写入。
   embedding:
+    profiles: [local-embedding]
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9@sha256:c26a226262ad4ff3330fb30b76653c1bb65da2fcf413b92284545a010e0a8a48
     platform: linux/amd64
     restart: unless-stopped

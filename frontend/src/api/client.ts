@@ -440,6 +440,20 @@ export async function getEvaluationTask(taskId: number, signal?: AbortSignal): P
   return fetchJson<EvaluationTaskRead>(`/api/evaluation/tasks/${taskId}`, signal);
 }
 
+async function patchJson<T>(url: string, payload: unknown): Promise<T> {
+  const response = await fetch(url, {
+    method: "PATCH", credentials: "include",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) throw new ApiError(response.status, await readErrorMessage(response));
+  return response.json() as Promise<T>;
+}
+
+export async function updateEvaluationTaskVisibility(taskId: number, visibility: EvaluationVisibility): Promise<EvaluationTaskRead> {
+  return patchJson<EvaluationTaskRead>(`/api/evaluation/tasks/${taskId}/visibility`, { visibility });
+}
+
 export async function submitResponseFeedback(
   responseId: number,
   feedbackType: FeedbackType

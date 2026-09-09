@@ -25,6 +25,21 @@ class FixedVectors:
         return [VectorMatch("chunk", 1, 2, 0, 0.8)]
 
 
+@pytest.mark.asyncio
+async def test_duplicate_model_config_cannot_judge_itself(monkeypatch) -> None:
+    from dataclasses import replace
+    from unittest.mock import AsyncMock
+    from app.schemas.evaluation import EvaluationTaskCreate
+    from app.services.rag.errors import KnowledgeBaseError
+    candidate = model(1)
+    duplicate = replace(candidate, id=2, display_name="另一配置")
+    resolve = AsyncMock(side_effect=[[candidate], [duplicate]])
+    monkeypatch.setattr("app.services.rag.service.model_config_service.resolve_runtime_models", resolve)
+    payload = EvaluationTaskCreate(taskType="rag", prompt="问题", modelIds=[1], judgeModelId=2, knowledgeBaseId=1)
+    with pytest.raises(KnowledgeBaseError, match="不同"):
+        await RagEvaluationService().start(payload, AsyncMock(), 1)
+
+
 class FixedJudge:
     def __init__(self) -> None:
         self.calls = 0
@@ -35,8 +50,12 @@ class FixedJudge:
 
 
 @pytest.mark.asyncio
-async def test_full_service_scores_before_final_response_and_history_matches(stored, monkeypatch) -> None:
-    store, context, prepared, _ = stored
+@pytest.mark.parametrize("visibility", ["private", "public"])
+async def test_full_service_scores_before_final_response_and_history_matches(stored, monkeypatch, visibility) -> None:
+    store, context, prepared, engine = stored
+    with Session(engine) as db:
+        db.get(EvaluationTask, context.task_id).visibility = visibility
+        db.commit()
     candidate, judge = Candidate("申请材料"), FixedJudge()
     runner = RagEvaluationRunner(store, embedding=Embedding(), vectors=FixedVectors(), client_factory=lambda _: candidate)
     service = RagEvaluationService(store, runner)

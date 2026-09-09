@@ -77,9 +77,11 @@ function App() {
               <Route path="knowledge-bases" element={<KnowledgeBasesPage />} />
               <Route path="rag" element={<RagEvaluationPage />} />
               <Route path="models" element={<ModelConfigsPage />} />
+              <Route path="embedding-config" element={<Navigate to="/models?tab=embedding" replace />} />
               <Route path="users" element={<AdminUsersPage />} />
               <Route path="scoring-rules" element={<ScoringRulesPage />} />
-              <Route path="history" element={<HistoryPage />} />
+              <Route path="history" element={<HistoryPage key="chat-history" taskType="chat" />} />
+              <Route path="rag/history" element={<HistoryPage key="rag-history" taskType="rag" />} />
               <Route path="feedback" element={<FeedbackStatsPage />} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />

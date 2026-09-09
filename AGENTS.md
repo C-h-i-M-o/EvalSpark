@@ -1,5 +1,15 @@
 # AGENT.md
 
+## 2026-09-09 当前执行约定（优先于下方历史阶段记录）
+
+- RAG 现支持 public/private，默认私有；公开任务供所有登录用户完整查看回答、评分和任务证据，源知识库与文件仍私有。`/history` 固定普通评测，`/rag/history` 固定 RAG；作者通过历史详情及 PATCH `/api/evaluation/tasks/{task_id}/visibility` 修改自己任务的可见性。无新迁移，不批量修改旧记录；本轮权限测试仅使用隔离数据。
+
+- V3 已恢复开发，Docker 已启动；此前“保持 Docker 关闭”的限制已解除。内置 TEI 仍不自动启动，使用 `local-embedding` profile 显式选择。
+- 老大确认 Embedding 由管理员通过 `/embedding-config` 管理**全系统单一配置**，云端和本地均使用 Base URL/API Key 的 OpenAI-compatible 接口。知识库不选择供应商；索引语义变化需要整库重建。
+- 新迁移 `20260909_01` 增加单例配置表。老大已单独授权备份及依次执行 `20260902_01/02`、`20260909_01`，随后启动业务前后端。三项迁移已成功执行并实查版本，备份与启动证据见 `docs/v3-rag-spec-plan.md` 顶部。
+- 隔离验收新增 `verify-rag.ps1 -Mode api` / `verify-rag.sh api`，真实 MySQL/Qdrant/Redis/Worker 配合确定性 HTTP 模型，不加载权重；`integration` 保留 TEI 验收。三档串行运行，不清空任何数据卷。
+- 功能与最终测试状态以合并计划顶部为准；真实供应商与浏览器/容量验收必须单独记录。未经进一步授权不向收费模型发送真实文档，不自动推送。
+
 ## 项目概览
 
 MultiChatEval 是一个“面向多模型问答的对话质量评估系统”。项目目标不是绝对判断哪个 AI 回答最好，而是通过多模型并发回答、客观指标、规则评分、可选 LLM 评审和用户反馈，帮助用户结构化比较不同模型回答。
@@ -16,9 +26,9 @@ MultiChatEval 是一个“面向多模型问答的对话质量评估系统”。
 
 ## 当前技术栈
 
-- 阶段 7 已补充 `scripts/verify-rag.ps1` / `scripts/verify-rag.sh` 的 unit/integration 独立 Docker 验收入口、假模型 HTTP 服务及 API 联合用例，未运行。配置解析、PowerShell 语法和 Git 差异静态检查通过不等于 pytest/Vitest/构建通过。脚本固定项目 `evalspark-rag-test`、环境文件 `docker/rag-test.env`，只共享模型缓存，正文/队列/向量/MySQL 使用测试卷。继续保持 Docker 关闭、不启宿主机运行时；资源充足设备按合并计划第 11 节验收，不用包含宿主机工具和 Vue 检查的旧 `verify-react-rewrite.sh`。
+- 验收使用 verify-rag 的 unit/api/integration 三档，测试项目固定 evalspark-rag-test，不启用宿主机运行时或 Vue 检查。unit 和 api 已执行对应测试，完整 TEI/真实供应商/性能门禁仍独立记录。
 
-- V3 RAG 正在实施：Compose 增加 TEI CPU（Qwen3-Embedding-0.6B）、Qdrant、Redis、Celery Worker；规格、阶段提交及验收统一见 `docs/v3-rag-spec-plan.md`。阶段 1—5 已实现私有知识库、四格式索引、逐模型检索回答、证据快照、用量、三轮联合评分、任务 API/历史/反馈、私有内容隔离与超期收尾代码。阶段 6 已接入 React `/knowledge-bases`、`/rag`、历史类型筛选及引用/评分/费用 UI，行为放 `.ts` hooks，Vue 不改。当前设备内存受限且 Docker 已关闭，老大允许延期测试和本地部署，优先完成各阶段代码；不要重启 Docker，阶段 5—6 新增测试、前端构建、浏览器及真实模型全链路待高内存设备验收，不得把延期记为通过。迁移 `20260902_01/02` 仅应用于独立测试库，业务升级仍须确认备份与恢复；新后端依赖 task_type 列和块正文 MEDIUMTEXT。Agent 与 AI 安全测试集另行设计。
+- V3 RAG 已实现私有知识库、四格式索引、多候选检索/流式回答、三轮联合评分、历史/反馈与隐私隔离。新增管理员全局 Embedding 配置，云端或本地统一 API；React 行为放 .ts，Vue 不改。业务库已备份并升级至 20260909_01，前后端与 Worker 已启动，内置 TEI 未启动。完整验收证据见 docs/v3-rag-spec-plan.md 顶部；Agent 和安全测试集另行设计。
 - 后端：Python、FastAPI、SQLAlchemy 2.0、Alembic、Pydantic Settings、pytest
 - 当前主前端：React 19、TypeScript、Vite、React Router、Tailwind CSS、Ant Design、Recharts、GSAP，独立目录 `frontend/` 并复用现有后端 API
 - 历史前端：Vue 3、JavaScript、Vite、Pinia、Vue Router、Axios、Element Plus、Markdown-it、DOMPurify、GSAP，位于 `vue-frontend/`，后续不再作为主要开发目标
@@ -318,10 +328,16 @@ Final = 0.90 × BaseFinal + 0.10 × FeedbackScore  # 已有反馈
 
 优先推进的任务是：
 
-1. 当前设备不重启 Docker；在资源充足设备先运行 `verify-rag` 的 unit 和 integration 验收。业务库备份/恢复和迁移另获授权后，才使用 `start-local` 启动完整开发栈。
+1. 当前 Docker 与业务前后端已运行；优先使用 unit/api 进行回归。内置 TEI、真实供应商和大规模性能按资源与授权另行验收，不自动清理数据卷。
 2. 确认 React 主前端能调用后端真实模型接口。
 3. 确认逐 token 流式展示、“评分中……”状态和全局思考模式行为正常。
 4. 验证评分结果、点赞/点踩和公开评论均正确持久化到 MySQL。
 5. 验证公开任务跨用户可见、私有任务仅创建者可见。
 6. React/V3 自动验收使用 `scripts/verify-rag.ps1 -Mode unit` 或 `bash scripts/verify-rag.sh unit`，真实浏览器验收另行记录；Vue 不参与本次开发或验收。
 7. 如需查看旧实现，可使用 `./scripts/start-local-vue.sh` 启动历史 Vue 前端。
+
+### 2026-09-09 评测交互补充
+
+- 普通/RAG 共用今日用量刷新，管理员显示实际消耗且不限额。
+- 模型/Embedding 统一到系统设置的模型配置页签，旧 Embedding 路由兼容跳转。
+- RAG 默认开启思考，前后端禁止相同配置或同供应商同模型的重复配置自我评审。
