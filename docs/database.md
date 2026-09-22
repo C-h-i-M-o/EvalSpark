@@ -1,5 +1,68 @@
 # 数据库设计
 
+2026-09-22 迁移 `20260922_01`（前置 `20260920_01`）新增 `conversation_turns.generation_epoch`，整数非空、默认1。每次显式重试锁内递增；心跳、阶段启动、结果写入和收尾核对当前代次。迁移仅编写未执行，业务部署需依次包含 `20260918_01`、`20260920_01`、`20260922_01`，备份及执行另行授权。
+
+失败分支操作沿用 `conversation_usage`：stage=`branch_action`，operation_key=`branch:{requestKey}`，已完成且 accounted=true，Token/费用为0。detail_json 保存请求摘要、turnId、modelConfigId、action、responseId、attempt；它是幂等操作记录，不是模型费用。每次操作新建同任务/同模型的 `model_responses`，config_snapshot 追加 conversationAttempt/branchAction；旧失败回答及费用保持原值。新响应ID隔离生成/检索费用，递增attempt隔离摘要上下文。跳过追加失败占位及排除统计的评分状态，不重开原轮任务。续聊只读取成功回答，展示读取最新尝试。
+
+原轮要求提取完成后，requirements 流水 detail_json 标记 requirementsSaved=true；显式重试只复用这些已保存要求，标记缺失时拒绝重试，避免用不完整要求评价新回答。无历史记录回填或业务数据库写入。
+
+问题状态沿用 `conversation_usage`，`stage=resolution`，`operation_key=assessment:{jobId}:resolution:{issueHash}:{reviewIndex}`。detail_json 保存报告/问题/组号、固定 packet、实际 usage 及独立 result（valid/status/reason/errorCode/evidence）；不写回 ConversationJudgeRun 或历史分数。报告完成前将三组状态汇总写入 input_json.report.issueResolutions/resolutionComplete，finish 同步到 result_json.report。无新增迁移，当前仅隔离库验证。
+
+新报告 `input_json.report.semanticPreparation=3`：窗口、相邻边界、非相邻完整窗口对依次复用 opportunity 流水。`detail_json.result` 保留未过滤提取结果，正式机会按精确触发/目标锚点合并；最多新增32次远距离提取，预算及数量缺口保留。冻结时按版本重建来源及规范合并结果，版本1/2保持原算法；无新表或迁移。
+
+单轮评分 `input_json.packet` 保留完整历史、回答和 RAG 资料，`batches` 保存逐项规范材料或预算不足的 unknown 包，正式复评原样复用。歧义检查项新增可空 `ambiguous_source_id` 绑定本分支用户消息，结论与引用存于独立 JudgeRun，不改共享 requirement 记录。资料未能完整送评时结果显式标记 `rag_evidence_budget_exceeded`，不持久化虚构的通过断言。本轮仅代码检查，未执行数据库操作。
+
+上下文展示不新增表或迁移：读取 `conversation_contexts.snapshot_json`（普通根快照、RAG 的 rag_requests.rewrite/answer），按轮次与模型选择 attempt 最大记录；`covered_through_turn` 仅表示历史读取边界。公开接口投影最小元数据，不返回快照正文。
+
+迁移 `20260920_01`（前序 `20260918_01`）为 model_configs 增加可空 INTEGER `context_window`，旧值为 NULL，不猜测供应商容量。仅在固定隔离测试库执行升级；业务部署需先备份并单独授权执行两项多轮相关迁移，当前不得自动升级业务库。降级会删除容量字段，尚未验证。
+
+报告准备固定沿用 `conversation_assessments.input_json`：`originalReportInput` 保存提交时的 packet 及可选 batches；`preparationFrozen=true`、最终 packet/batches 与 report 内 preparationUsageIds、semanticOpportunityCount 在同一事务保存。原始要求和未知约束仍保留，不能由提取结果覆盖。无新增表或迁移；已验证错误计划不会改变原快照。
+
+报告准备阶段复用 `conversation_usage`，无新增迁移：stage 为 `opportunity`，operation_key 为 `assessment:{id}:opportunity:{index}`。detail_json 保存 assessmentId、preparationIndex、sourceIds、snapshotHash，调用结束后追加 usage 和经过校验的 result。费用先结算，解析失败仍保留已知费用；结果保存前不允许正式 JudgeRun 开始。作业中断将 pending 准备流水置 unknown，已完成流水保留。准备服务已在固定隔离 MySQL 验证，业务库未执行多轮迁移。
+
+## 2026-09-20 报告存储增量
+
+生成心跳复用 `conversations.updated_at`，每次更新同时限定 user_id、generating 状态及 conversation_turns 的当前轮次标识。结束轮次和旧轮次心跳不更新后续会话。该时间也会随会话正常变更更新，后续恢复只能把它作为保守存活信号；不能仅凭任务创建时间判定多轮失活。无新迁移。
+
+多轮恢复使用同一事务锁会话、轮次、任务、回答和本轮用量；在持有阶段流水锁后才结算日额度，避免与摘要回调形成相反锁序。未完成 ConversationUsage 置 unknown 并保留空费用，已完成且未入账的流水沿用 accounted 幂等补账；RAG pending 阶段改 unknown，已知部分沿用唯一 TokenUsageLog 入账。成功回答保留，其他回答失败，任务/轮次 interrupted，最后会话 idle。不会批量重写旧任务或启动新模型调用。
+
+要求检查项在固定 packet/batches 中增加可选 `allowed_source_ids`。原文允许范围由要求有效区间装配，非 null 时逐条引文必须属于该集合；超预算降为未知时保存空集合，不伪装为已检查部分原文。字段属于已有 JSON 快照，无新增迁移。旧快照未提供时按原有来源校验兼容读取，不批量回填。
+
+检查项 JSON 新增 `evidence_refs` 保存校验后的来源 ID、原文轮次和逐字引文；`conversation_judge_runs.result_json.items` 与报告 `result_json.report.opportunityReviews[].findings` 保留这些字段。旧检查项加载时默认空引用列表，不能从旧拼接文本猜测轮次。无新增数据表/列，不批量改写历史记录。
+
+会话报告复用 `conversation_assessments` 和 `conversation_judge_runs`，无额外迁移。`input_json` 固定总 packet、batches 和 report 元数据；每个检查项只属于一个分段，来源可跨段重复，原文不截断。`run_index=(reviewIndex-1)*batchCount+batchIndex`，正式报告执行三组相同分段，每次调用独立登记用量；按完整评审组聚合检查项，不能平均分段总分。`result_json.report` 记录固定范围的生成成功/失败、限制、RAG 趋势和逐组机会统计，未来对话不修改既有报告。业务库仍未执行 `20260918_01`。
+
+历史引用映射随实际回答消息保存在 conversation_contexts.snapshot_json.rag_requests.answer 中；评分时核对当前资料的文档版本、片段、原文与位置，并复制至 conversation_assessments.input_json.packet.rag.evidence[].historical_references。数组保留多个旧轮次来源，无新增列或迁移；原回答资料快照不被重新编号覆盖。
+
+RAG 实际输入在 conversation_contexts.snapshot_json.rag_requests 中按 rewrite/answer 保存，每阶段包含 messages、preparation_hash、估计量、压缩结果及原文 source_ids。两阶段共用同一生成 attempt，不能相互覆盖；摘要调用在 conversation_usage 使用 rewrite_summary/answer_summary 阶段键分别幂等入账，无新增数据库列。
+
+多轮 RAG 存储补充（开发中）：预留轮次与 RAG 回答共用同一 evaluation_tasks.id，不再另外建任务。RAG 检索/生成费用仍从 rag_response_details.stage_usage_json 汇总至既有唯一回答用量日志，新摘要、要求提取与 Judge 费用使用 conversation_usage，避免重复入账。多轮生成成功的兼容 evaluation_results 保持 final_score=null、excluded_from_stats=true，judge_prompt_version=rag-multiturn-v1；正式质量结果以 conversation_assessments 为准。RAG 协调器及 HTTP 已接通隔离验证。
+
+## 2026-09-18 多轮结构（开发中）
+
+RAG 新评分使用既有新增表的 JSON 字段，不另增迁移：conversation_assessments.input_json.packet.rag 保存固定回答片段/位置和该回答资料快照；conversation_judge_runs.result_json 保存 ragAssertions（包括资料逐字引用）和 evidence 分组。正式复评重用输入并检查逐片段适用性，输出 dialogue/evidence 两组聚合；生成后自动提交已在隔离 MySQL 验证。旧 RAG 兼容评分不参与新评分聚合。
+
+`conversation_requirements` 已有版本存取服务：requirement_key 为服务端要求 ID，version 单调递增，source_turn 为本次版本变更轮次；detail_json 中 source_turn/source_id/quote 保留原始要求来源，retired_at 表示被替代的生效轮次。修改预算只新增退休版本和新要求，不更新旧行。读取报告截止轮次时先选当时每个 key 的最新版本，再按 scope/retired_at 判断适用性。服务仅作者可用，已由普通生成入口在候选调用前自动保存。
+
+普通生成内部协调器已创建 pending model_responses，完整 reply 返回后更新 success；失败/取消保存 failed，不保存失败残片为可续聊历史。generate:{responseId} 对应生成阶段用量并同事务入日累计。兼容旧 evaluation_results 时 final_score 为空且 excluded_from_stats=true，避免未接新评分的多轮结果被旧算法赋分。现有 TEXT 对单条回答仍有限制，超出 65535 UTF-8 字节显式失败并保留已知用量；长会话不等于无限单消息。
+
+摘要已使用 conversation_usage：operation_key 为 summary:{turnId}:{branchId}:{attempt}:{batch}，每次请求先登记 pending，回调后保存模型计费快照、latency、usage。已知用量与日累计同事务完成；未知用量不入账。重复开始被拒绝，重复结束不再次累计，生成终止后仍可记录已发生调用。现有输入快照命中时不创建新摘要流水。
+
+`conversation_contexts` 已由历史装配服务实际写入：snapshot_json 包含发送消息、来源列表、压缩信息及 preparation_hash；source_hash 校验对应原始历史内容。同一轮/模型/attempt 不可改写快照；准备参数一致时重用已保存输入。不会覆盖原始任务问题或模型回答。
+
+评分执行器已使用 assessment/judge_run/usage 三表：queued 作业原子认领为 running；外部调用前保存 pending run 和用量占位；每次返回在同事务更新判定与用量，最终从已保存 run 聚合成绩。取消时 pending 调用改 interrupted、用量标 unknown 且 tokens/cost 保持空值。已知阶段用量与日累计同事务幂等入账，accounted=true；未知用量保持 accounted=false。归属日期按阶段登记的 UTC 时间转换为北京时间，不重复写旧回答用量日志。Celery 作业入口已注册；每 60 秒恢复扫描已接入 Worker：重投 queued，超过四小时的 running 只标中断；普通/RAG HTTP 生成后即时投递已接通，真实队列联合验收尚待完成。
+
+新增迁移 `20260918_01`，前置 `20260909_01`。仅在独立测试库执行，业务库尚未迁移；不得因本文描述而直接对业务库执行升级或降级。升级保留原任务、回答和评分，新增会话默认私有，不修改旧任务可见性。
+
+- `conversations` 增加 visibility、config_json、knowledge_snapshot_json、current_turn、generation_status、updated_at。
+- `conversation_turns` 保存每轮问题和旧 task_id 关联，(conversation_id,turn_index) 与 (conversation_id,request_key) 唯一；生成锁不等待评分。
+- `conversation_contexts` 保存模型分支的压缩/输入快照与原文来源，(turn_id,model_config_id,attempt) 唯一。
+- `conversation_requirements` 保存要求版本及来源，(conversation_id,requirement_key,version) 唯一。
+- `conversation_assessments` 保存评分作业/结果快照，(conversation_id,operation_key) 唯一；`conversation_judge_runs` 保存各次 Judge 结果与失败码。
+- `conversation_usage` 保存阶段用量与入账标记；未知 Token/费用为空，operation_key 防止重复记账。后台评分和计费接入仍在开发，不能将表结构存在视为流程完成。
+
+新外键使用 BIGINT 匹配既有表。MySQL DDL 非事务化，升级检测已存在的会话新增列并核对类型/可空性后继续，避免部分失败后重复加列。回滚会删除新会话明细，需先备份且另行授权；本次未执行降级。完整字段和验收见 [多轮合并计划](multiturn-spec-plan.md)。
+
 ## 2026-09-09 任务可见性更新
 
 复用 `evaluation_tasks.visibility` 存储普通与 RAG 的 public/private；RAG 创建时省略则默认 private。作者修改时按任务 ID 与 user_id 加行锁后更新现有字段，不新增表或迁移，不批量转换旧记录，不改回答、评分、用量与知识库所有权。公开读取包括已存储的证据快照，源文件仍私有。测试仅使用隔离数据，本轮不修改业务任务的可见性。

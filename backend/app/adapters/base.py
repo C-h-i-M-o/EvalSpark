@@ -1,6 +1,15 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from decimal import Decimal
+from typing import Literal
+
+
+@dataclass(frozen=True)
+class ChatMessage:
+    """表示发送给模型的结构化对话消息。"""
+
+    role: Literal["system", "user", "assistant"]
+    content: str
 
 
 @dataclass(frozen=True)
@@ -11,6 +20,7 @@ class ModelRequest:
     temperature: float = 0.7
     extra_body: dict[str, object] = field(default_factory=dict)
     system_prompt: str = ""
+    messages: tuple[ChatMessage, ...] = ()
 
 
 @dataclass(frozen=True)

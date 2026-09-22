@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { Button, Modal, Space } from "antd";
 
 import { animateModalIn } from "../animations/pageMotion";
@@ -17,7 +18,10 @@ interface ModelResponseCardProps {
   feedbackSubmitting: boolean;
   showComments?: boolean;
   privateDiscussion?: boolean;
+  assessmentContent?: ReactNode;
   onFeedback: (responseId: number, feedbackType: FeedbackToggleResult["feedbackType"]) => void;
+  branchAction?: (action: "retry" | "skip") => void;
+  branchBusy?: boolean;
 }
 
 const dimensionLabels: Array<{ key: keyof EvaluationScore; label: string; weight: string }> = [
@@ -57,7 +61,8 @@ export function ModelResponseCard({
   feedbackSubmitting,
   showComments = false,
   privateDiscussion = false,
-  onFeedback
+  assessmentContent,
+  onFeedback, branchAction, branchBusy = false
 }: ModelResponseCardProps) {
   const [detailVisible, setDetailVisible] = useState(false);
   const detailRef = useRef<HTMLElement | null>(null);
@@ -111,24 +116,25 @@ export function ModelResponseCard({
       <ResponseHeader
         modelName={response.modelName}
         statusLabel={failed ? "调用失败" : "调用成功"}
-        scoreText={failed ? "失败" : formatScore(score.final)}
+        scoreText={failed ? "失败" : assessmentContent !== undefined ? "多轮评分" : formatScore(score.final)}
         failed={failed}
       />
       <ScrollableMarkdownAnswer content={response.answer} placeholder="暂无回答内容" />
       {response.rag && <RagEvidencePanel evidence={response.rag.evidence} rewrittenQuery={response.rag.rewrittenQuery} answer={response.answer} />}
       {response.rag?.failureStage && <p className="rag-error">RAG 链路未获得有效评分：{response.rag.errorCode}</p>}
-      <p className={`score-status-note ${score.scoreStatus}`}>{scoreStatusText(score.scoreStatus)}</p>
+      {assessmentContent === undefined && <p className={`score-status-note ${score.scoreStatus}`}>{scoreStatusText(score.scoreStatus)}</p>}
       <dl className="metric-row">
         <Metric label="耗时" value={`${response.latencyMs}ms`} />
         <Metric label="输出" value={String(response.outputTokens)} />
         <Metric label="成本" value={`${formatCost(response.estimatedCost)} ${response.currency}`} />
       </dl>
-      {response.rag ? <RagScoreSummary rag={response.rag} /> : <div className="score-bars">
+      {assessmentContent ?? (response.rag ? <RagScoreSummary rag={response.rag} /> : <div className="score-bars">
         <ScoreBar label="相关性" value={score.relevance} />
         <ScoreBar label="完整性" value={score.completeness} />
         <ScoreBar label="清晰度" value={score.clarity} />
-      </div>}
+      </div>)}
       <footer className="card-actions">
+        {failed && branchAction && <><Button disabled={branchBusy} onClick={() => branchAction("retry")}>重试本分支</Button><Button disabled={branchBusy} onClick={() => branchAction("skip")}>跳过本轮</Button></>}
         <Button
           className={feedback.liked ? "active" : ""}
           disabled={feedbackSubmitting}
@@ -162,6 +168,7 @@ export function ModelResponseCard({
       >
         <section ref={detailRef} className="response-detail-modal">
           <MarkdownRenderer content={response.answer} />
+          {assessmentContent === undefined ? <>
           {response.rag && <><RagEvidencePanel evidence={response.rag.evidence} rewrittenQuery={response.rag.rewrittenQuery} answer={response.answer} /><RagScoreDetails rag={response.rag} score={response.score} /></>}
           {response.rag && <h4>规则检查（占基础分 20%，以下为规则内部分项权重）</h4>}
           <div className="score-detail-list">
@@ -249,6 +256,7 @@ export function ModelResponseCard({
               <p>{score.judgeComment}</p>
             </article>
           ) : null}
+          </> : assessmentContent}
           {showComments ? <CommentPanel responseId={response.id} privateDiscussion={privateDiscussion} /> : null}
         </section>
       </Modal>

@@ -214,6 +214,110 @@ async def test_stage_replay_does_not_repeat_paid_rewrite(setup) -> None:
     assert all(len(client.requests) == 1 for client in clients.values())
 
 
+@pytest.mark.asyncio
+async def test_request_builders_receive_branch_inputs_and_replace_requests(setup) -> None:
+    """验证请求构建器收到分支上下文并替换实际供应商请求。"""
+    runner, context, prepared, models, _, _, _, clients = setup
+    rewrite_inputs: list[tuple[int, int, int]] = []
+    answer_inputs: list[tuple[int, str, int]] = []
+
+    async def rewrite_builder(model_config, task_context, item):
+        """构造测试用的改写请求并记录调用参数。"""
+        rewrite_inputs.append((model_config.id, task_context.task_id, item.response_id))
+        return ModelRequest(prompt="分支检索问题", model_name=model_config.model_name,
+            system_prompt="改写回调", max_tokens=11, temperature=0.0, extra_body={})
+
+    async def answer_builder(model_config, task_context, item):
+        """构造测试用的回答请求并记录调用参数。"""
+        answer_inputs.append((model_config.id, task_context.prompt, item.response_id))
+        return ModelRequest(prompt=json.dumps({"question": "分支回答", "evidence": []}),
+            model_name=model_config.model_name, system_prompt="回答回调", max_tokens=12,
+            temperature=0.0, extra_body={})
+
+    await runner.prepare_rag_snapshots(context, prepared, models, rewrite_request_builder=rewrite_builder)
+    _ = [event async for event in runner.stream_rag_answers(context, prepared, models,
+                                                            answer_request_builder=answer_builder)]
+    assert sorted(rewrite_inputs) == [(1, 10, 101), (2, 10, 102)]
+    assert sorted(answer_inputs) == [(1, context.prompt, 101), (2, context.prompt, 102)]
+    assert all(client.requests[0].system_prompt == "改写回调" for client in clients.values())
+    assert all(client.stream_requests[0].system_prompt == "回答回调" for client in clients.values())
+
+
+@pytest.mark.asyncio
+async def test_request_builder_failure_does_not_call_supplier(setup) -> None:
+    """验证改写请求构建失败不会产生付费阶段或供应商调用。"""
+    runner, context, prepared, models, store, _, _, clients = setup
+
+    async def fail_rewrite(model_config, task_context, item):
+        """模拟改写请求构建失败。"""
+        raise RuntimeError("上游地址不应泄漏")
+
+    await runner.prepare_rag_snapshots(context, prepared, models, rewrite_request_builder=fail_rewrite)
+    assert all(item.failure_stage == "rewrite" and item.error_code == "rag_rewrite_failed" for item in prepared)
+    assert all(not client.requests for client in clients.values())
+    assert all(not store.usages.get(item.response_id) for item in prepared)
+
+
+@pytest.mark.asyncio
+async def test_answer_request_builder_failure_does_not_call_supplier(setup) -> None:
+    """验证回答请求构建失败不会产生回答付费阶段或供应商调用。"""
+    runner, context, prepared, models, store, _, _, clients = setup
+    await runner.prepare_rag_snapshots(context, prepared, models)
+
+    async def fail_answer(model_config, task_context, item):
+        """模拟回答请求构建失败。"""
+        raise RuntimeError("回答回调内部错误")
+
+    _ = [event async for event in runner.stream_rag_answers(context, prepared, models,
+                                                            answer_request_builder=fail_answer)]
+    assert all(item.failure_stage == "generate" and item.error_code == "rag_generate_failed" for item in prepared)
+    assert all(not client.stream_requests for client in clients.values())
+    assert all(not any(stage.stage == "generate" for stage in store.usages.get(item.response_id, []))
+               for item in prepared)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["rewrite", "generate"])
+async def test_stage_registration_failure_preserves_existing_state(setup, monkeypatch, stage) -> None:
+    """阶段登记失败直接退出，不能保存失败回答或覆盖原证据快照。"""
+    runner, context, prepared, models, store, _, _, clients = setup
+    if stage == "generate":
+        await runner.prepare_rag_snapshots(context, prepared, models)
+    original = [item.model_copy(deep=True) for item in prepared]
+    saved = store.save_stage
+
+    async def fail_registration(task_context, response_id, usage, *, start=False):
+        """模拟数据库拒绝阶段占位，不发出任何外部调用。"""
+        if start and usage.stage == stage:
+            raise RuntimeError("登记失败")
+        await saved(task_context, response_id, usage, start=start)
+
+    monkeypatch.setattr(store, "save_stage", fail_registration)
+    with pytest.raises(RuntimeError, match="登记失败"):
+        if stage == "rewrite":
+            await runner.prepare_rag_snapshots(context, prepared, models)
+        else:
+            _ = [event async for event in runner.stream_rag_answers(context, prepared, models)]
+    assert prepared == original and not store.answers
+    assert all(not client.stream_requests for client in clients.values())
+    if stage == "rewrite":
+        assert all(not client.requests for client in clients.values())
+
+
+@pytest.mark.asyncio
+async def test_embedding_preflight_denial_does_not_start_embedding(setup) -> None:
+    """Embedding 前置额度检查失败时，不登记或发送 Embedding 调用。"""
+    runner, context, prepared, models, store, embedding, _, _ = setup
+
+    async def deny():
+        """模拟改写后额度已耗尽的阶段检查。"""
+        raise ValueError("额度不足")
+
+    await runner.prepare_rag_snapshots(context, prepared, models, before_embedding=deny)
+    assert all(item.failure_stage == "embed" for item in prepared)
+    assert all(not any(usage.stage == "embed" for usage in store.usages[item.response_id]) for item in prepared)
+
+
 def test_rag_request_without_knowledge_base_is_rejected() -> None:
     from pydantic import ValidationError
     from app.schemas.evaluation import EvaluationTaskCreate

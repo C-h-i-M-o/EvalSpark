@@ -1,5 +1,7 @@
 # 开源项目复用说明
 
+2026-09-18 多轮基础模块继续复用 httpx/OpenAI-compatible 适配器、Pydantic 严格校验、SQLAlchemy/Alembic、pytest 与 Docker 隔离测试，未引入新框架或依赖。上下文未知 tokenizer 时采用明确标识的 UTF-8 字节保守估计，不能当作实际 Token 用量。真实 Judge 校准与多轮检索集成尚未完成，详见 `multiturn-spec-plan.md`。
+
 V3 阶段 7 的验收继续复用现有 pytest、httpx ASGITransport、FastAPI/StreamingResponse、Docker Compose 和前端 Vitest，不新增依赖或另接评测框架。确定性模型假服务仅承载隔离测试协议，不属于生产推理服务，也不能用于证明真实 Judge 的语义质量。入口通过显式环境文件排除业务 `.env`，依据 [Compose 环境文件规则](https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/)；测试配置已解析，运行验收延期。
 
 ## V3 RAG 实际引入（阶段 1—3）

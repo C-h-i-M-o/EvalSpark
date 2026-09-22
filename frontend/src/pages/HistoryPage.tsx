@@ -1,7 +1,7 @@
 import { Select } from "antd";
 import { ModelResponseCard } from "../components/ModelResponseCard";
 import { useHistory } from "../features/history/useHistory";
-import { formatHistoryTime, historyStatusClass, historyStatusText, historyEmptyCopy } from "../features/history/history";
+import { conversationStatusText, formatHistoryTime, historyStatusClass, historyStatusText, historyEmptyCopy } from "../features/history/history";
 
 export function HistoryPage({ taskType }: { taskType: "chat" | "rag" }) {
   const view = useHistory(taskType);
@@ -11,6 +11,18 @@ export function HistoryPage({ taskType }: { taskType: "chat" | "rag" }) {
     {view.error && <p className="alert-message error">{view.error}</p>}
     <section className="history-layout">
       <aside className="history-panel">
+        <div className="history-conversation-section">
+          <div className="history-list-head"><div><p className="panel-label">多轮会话</p><h3>继续会话</h3></div><span>{view.conversations.total} 条</span></div>
+          <div className="history-list" aria-busy={view.conversationLoading}>
+            {view.conversations.items.map((conversation) => <button key={conversation.id} type="button" className="history-item" onClick={() => view.openConversation(conversation.id)}>
+              <span className="history-item-title">{conversation.title || "未命名会话"}</span>
+              <span className="history-item-meta">{formatHistoryTime(conversation.updatedAt ?? conversation.createdAt)} · 已进行 {conversation.currentTurn} 轮</span>
+              <span className="history-item-tags"><i>{conversation.mode === "rag" ? "RAG" : "普通会话"}</i><i>{conversation.visibility === "private" ? "私有" : "公开"}</i><i>{conversationStatusText(conversation.canContinue, conversation.generationStatus)}</i></span>
+            </button>)}
+            {!view.conversationLoading && !view.conversations.items.length && <p className="empty-note">暂无多轮会话。</p>}
+          </div>
+          <div className="pagination"><button type="button" disabled={view.conversationPage <= 1 || view.conversationLoading} onClick={view.previousConversationPage}>上一页</button><span>{view.conversationPage} / {view.conversationTotalPages}</span><button type="button" disabled={view.conversationPage >= view.conversationTotalPages || view.conversationLoading} onClick={view.nextConversationPage}>下一页</button></div>
+        </div>
         <div className="history-list-head"><div><p className="panel-label">任务列表</p><h3>最近评测</h3></div><span>{view.listing.total} 条</span></div>
         <div className="history-list" aria-busy={view.loading}>{view.rows.map((item) =>
           <button key={item.taskId} type="button" className={view.selectedTask?.taskId === item.taskId ? "history-item active" : "history-item"} onClick={item.select}>

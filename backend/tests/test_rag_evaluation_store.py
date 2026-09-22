@@ -1,4 +1,5 @@
 import importlib
+from unittest.mock import AsyncMock
 import pytest
 import pytest_asyncio
 from sqlalchemy import create_engine, select
@@ -8,6 +9,7 @@ import app.models
 from app.adapters.base import ModelReply, ModelUsage
 from app.db.base import Base
 from app.models.evaluation import EvaluationTask
+from app.models.conversation import Conversation, ConversationTurn
 from app.models.knowledge_base import KnowledgeBase, KnowledgeChunk, KnowledgeDocument
 from app.models.model_config import ModelConfig, ModelProvider
 from app.models.rag import RagResponseDetail
@@ -26,6 +28,18 @@ class Transaction:
 
     async def __aexit__(self, *args):
         return self.transaction.__exit__(*args)
+
+
+class AsyncTestConnection:
+    """仅桥接真实 SQLite 连接的同步结构检查，不模拟 MySQL 行锁。"""
+
+    def __init__(self, connection) -> None:
+        """保存当前测试事务的真实连接。"""
+        self.connection = connection
+
+    async def run_sync(self, callback):
+        """在真实连接执行表存在性检查。"""
+        return callback(self.connection)
 
 
 class AsyncTestSession:
@@ -47,6 +61,10 @@ class AsyncTestSession:
 
     async def scalar(self, statement):
         return self.session.scalar(statement)
+
+    async def connection(self):
+        """为恢复扫描提供与 AsyncSession 对应的结构检查入口。"""
+        return AsyncTestConnection(self.session.connection())
 
     async def scalars(self, statement):
         return self.session.scalars(statement)
@@ -105,6 +123,89 @@ async def test_create_persists_private_task_and_answer_before_external_calls(sto
         assert "baseUrl" not in response.config_snapshot
 
 
+def reserved_rag_task(engine, context) -> None:
+    """建立显式 ID 的 SQLite 轮次，仅验证存储契约，不冒充并发锁验收。"""
+    from app.services.multiturn.catalog import model_identity
+    from app.services.rag.usage import model_snapshot
+    candidate = model(1)
+    runtime = context.embedding_runtime
+    with Session(engine) as db:
+        db.add(Conversation(id=901, user_id=1, title="多轮 RAG", mode="rag", visibility="private",
+            current_turn=1, generation_status="generating",
+            config_json={"modelIds": [1], "enableThinking": False,
+                "identities": {"1": model_identity(candidate)},
+                "models": [model_snapshot(candidate).model_dump(mode="json", by_alias=True)]},
+            knowledge_snapshot_json={"knowledgeBaseId": 1, "contentRevision": 4, "documents": [[1, 2]],
+                "embeddingCollection": runtime.rag_embedding_collection, "embeddingRevision": runtime.rag_embedding_revision}))
+        db.add(EvaluationTask(id=901, user_id=1, conversation_id=901, prompt="继续", task_type="rag", status="pending", visibility="private"))
+        db.add(ConversationTurn(id=901, conversation_id=901, task_id=901, turn_index=1,
+            request_key="next", request_hash="hash", prompt="继续", generation_status="generating"))
+        db.commit()
+
+
+@pytest.mark.asyncio
+async def test_reserved_turn_reuses_task_and_rejects_duplicate_initialization(stored) -> None:
+    """复用轮次任务，第二次初始化不能创建重复回答或新任务。"""
+    store, context, _, engine = stored
+    reserved_rag_task(engine, context)
+    current, prepared = await store.create(1, 1, "继续", [model(1)], enable_thinking=False,
+        conversation_id=901, reserved_turn_id=901, visibility="public")
+    assert current.task_id == 901 and len(prepared) == 1
+    with Session(engine) as db:
+        assert db.get(EvaluationTask, 901).visibility == "private"
+        assert len(db.scalars(select(EvaluationTask)).all()) == 2
+    with pytest.raises(RagClientError, match="已初始化"):
+        await store.create(1, 1, "继续", [model(1)], enable_thinking=False,
+                           conversation_id=901, reserved_turn_id=901)
+    with Session(engine) as db:
+        assert len(db.scalars(select(ModelResponse).where(ModelResponse.task_id == 901)).all()) == 1
+
+
+@pytest.mark.asyncio
+async def test_multiturn_generation_settles_without_legacy_judge(stored, monkeypatch) -> None:
+    """新流程仅结算已完成回答，保留空质量分且重复收尾不重复记账。"""
+    from app.models.evaluation import EvaluationResult
+    store, context, _, engine = stored
+    reserved_rag_task(engine, context)
+    current, prepared = await store.create(1, 1, "继续", [model(1)], enable_thinking=False,
+                                           conversation_id=901, reserved_turn_id=901)
+    with pytest.raises(RagClientError, match="尚未结束"):
+        await store.finalize_multiturn_response(current, prepared[0].response_id)
+    prepared[0].evidence = await store.read_evidence(current, [VectorMatch("chunk", 1, 2, 0, 0.7)])
+    await store.fix_snapshots(current, prepared)
+    await store.save_answer(current, prepared[0], "回答 [S1]", None)
+    account = AsyncMock(return_value=True)
+    monkeypatch.setattr("app.services.rag.evaluation_store.token_quota_service.record_rag_usage", account)
+    await store.finalize_multiturn_response(current, prepared[0].response_id)
+    await store.finalize_multiturn_response(current, prepared[0].response_id)
+    assert account.await_count == 1
+    with Session(engine) as db:
+        response = db.get(ModelResponse, prepared[0].response_id)
+        result = db.scalar(select(EvaluationResult).where(EvaluationResult.response_id == response.id))
+        assert response.status == "success" and response.answer_text == "回答 [S1]"
+        assert result.final_score is None and result.excluded_from_stats
+        assert result.judge_prompt_version == "rag-multiturn-v1"
+        assert db.get(EvaluationTask, current.task_id).status == "pending"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["prompt", "version", "thinking", "turn"])
+async def test_reserved_turn_rejects_changed_inputs_before_answers(stored, change) -> None:
+    """轮次、问题、知识版本和生成配置变化都在创建回答前被拒绝。"""
+    store, context, _, engine = stored
+    reserved_rag_task(engine, context)
+    if change == "version":
+        with Session(engine) as db:
+            db.get(KnowledgeBase, 1).content_revision += 1
+            db.commit()
+    with pytest.raises(RagClientError):
+        await store.create(1, 1, "不同问题" if change == "prompt" else "继续", [model(1)],
+            enable_thinking=change == "thinking", conversation_id=901,
+            reserved_turn_id=999 if change == "turn" else 901)
+    with Session(engine) as db:
+        assert not db.scalars(select(ModelResponse).where(ModelResponse.task_id == 901)).all()
+
+
 @pytest.mark.asyncio
 async def test_evidence_is_independent_of_deleted_current_text(stored) -> None:
     store, context, prepared, engine = stored
@@ -136,6 +237,19 @@ async def test_changed_library_rejects_and_persists_failed_snapshot(stored) -> N
         detail = db.get(RagResponseDetail, prepared[0].response_id)
         assert detail.evidence_json == [] and detail.failure_stage == "snapshot"
         assert detail.error_code == "knowledge_base_changed"
+
+
+@pytest.mark.asyncio
+async def test_embedding_semantic_change_rejects_snapshot(stored, monkeypatch) -> None:
+    """检索途中 Embedding 语义变更时不能固定旧空间的证据。"""
+    store, context, prepared, engine = stored
+    prepared[0].evidence = await store.read_evidence(context, [VectorMatch("chunk", 1, 2, 0, 0.7)])
+    changed = context.embedding_runtime.model_copy(update={"rag_embedding_collection": "new-semantic-space"})
+    monkeypatch.setattr("app.services.rag.evaluation_store.runtime_config", lambda config: changed)
+    assert not await store.fix_snapshots(context, prepared)
+    with Session(engine) as db:
+        detail = db.get(RagResponseDetail, prepared[0].response_id)
+        assert detail.evidence_json == [] and detail.error_code == "knowledge_base_changed"
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, StrictBool
 
 app = FastAPI(title="RAG 隔离验收假模型")
+multiturn_calls: dict[str, int] = {}
 
 
 class EmbeddingRequest(BaseModel):
@@ -31,7 +32,7 @@ class Message(BaseModel):
 
 
 class CompletionRequest(BaseModel):
-    model: Literal["candidate-a", "candidate-b", "candidate-fail", "judge"]
+    model: Literal["candidate-a", "candidate-b", "candidate-fail", "judge", "multiturn-judge"]
     messages: list[Message] = Field(min_length=2, max_length=2)
     stream: StrictBool = False
 
@@ -39,6 +40,40 @@ class CompletionRequest(BaseModel):
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/test/multiturn-calls/{marker}")
+async def count_multiturn_calls(marker: str) -> dict[str, int]:
+    """只为隔离验收返回对应测试标记的 HTTP 调用次数。"""
+    return {"calls": multiturn_calls.get(marker, 0)}
+
+
+def multiturn_verdict(packet: dict[str, object]) -> str:
+    """按固定材料生成可核验判定，不访问网络，不模拟真实评审能力。"""
+    sources = {source["id"]: source["text"] for source in packet["sources"]}
+    if "checks" not in packet:
+        trigger = next(source for source in packet["sources"] if source["id"].endswith(":user"))
+        target = next(source for source in packet["sources"] if source["id"].startswith("response:"))
+        marker = trigger["text"]
+        multiturn_calls[marker] = multiturn_calls.get(marker, 0) + 1
+        return json.dumps({"complete": True, "unresolved": [], "opportunities": [{"dimension": "goal",
+            "description": "完成固定测试目标", "trigger": {"source_id": trigger["id"], "quote": trigger["text"]},
+            "target": {"source_id": target["id"], "quote": target["text"]}, "supporting": []}]}, ensure_ascii=False)
+    if packet["scope"] == "dialogue":
+        sources["answer"] = packet["answer"]
+    items = []
+    for check in packet["checks"]:
+        state = check.get("required_applicability") or ("not_applicable" if check.get("coverage_only") else "applicable")
+        allowed = check.get("allowed_source_ids")
+        source_id = next((identity for identity in sources if allowed is None or identity in allowed), None)
+        evidence_ids = check.get("required_source_ids") or ([source_id] if source_id else [])
+        items.append({"id": check["id"], "applicability": state, "rating": 4 if state == "applicable" else None,
+            "passed": True if check["critical"] and state == "applicable" else None,
+            "reason": "确定性队列验收判定", "evidence": [{"source_id": identity, "quote": sources[identity]}
+                for identity in evidence_ids] if state == "applicable" else []})
+    marker = str(packet["answer"])
+    multiturn_calls[marker] = multiturn_calls.get(marker, 0) + 1
+    return json.dumps({"items": items}, ensure_ascii=False)
 
 
 @app.post("/v1/chat/completions", response_model=None)
@@ -49,6 +84,10 @@ async def complete(payload: CompletionRequest, authorization: Annotated[str | No
         raise HTTPException(422, "必须保留独立的系统指令与用户数据")
     if payload.model == "candidate-fail":
         raise HTTPException(503, "合成候选故障")
+    if payload.model == "multiturn-judge":
+        content = multiturn_verdict(json.loads(payload.messages[1].content))
+        return {"id": "multiturn-test", "choices": [{"message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 4, "total_tokens": 24}}
     if payload.model == "judge" or payload.stream:
         try:
             data = json.loads(payload.messages[1].content)

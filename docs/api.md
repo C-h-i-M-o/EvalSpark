@@ -1,5 +1,74 @@
 # API 说明
 
+### 多轮失败分支恢复（2026-09-22，代码已接入，未运行验收）
+
+`POST /api/evaluation/conversations/{conversationId}/branches/stream` 使用与续聊相同的 NDJSON 协议，请求为 `{ "turnId": 12, "modelConfigId": 3, "requestKey": "唯一请求键", "action": "retry" }`；action 也可为 `skip`，请求键最多64字符。问题、历史与配置由服务端读取，不接受客户端覆盖。
+
+仅作者可操作最新已结束轮次的最新失败回答；已成功、已跳过、会话仍在生成、已开始下一轮或已经为该轮提交会话报告时拒绝。retry 还要求原轮共享要求已确认保存、冻结配置可用及额度足够；RAG 同时校验知识库版本。skip 不调用模型或检索，不要求模型仍启用。非法参数返回422，权限统一404，状态冲突409，额度不足429。
+
+首次操作返回 `turn_started`（turnId/taskId/turn/replayed=false），后续重试沿用回答事件，跳过返回 `answer_completed`（status=failed/errorCode=branch_skipped），最终 `turn_completed`。同键同参数重复请求返回原标识且 replayed=true，不重新调用；同键不同参数拒绝。恢复分页和任务详情每模型显示最新尝试，旧尝试与费用仍保留，跳过不产生成功评分。评分提交失败仍发送 `assessment_submission_failed`，已保存回答不丢失。
+
+新报告标记 `resolutionVersion=1`，历史三组评审结束后独立判断问题现状。`result.report.resolutionComplete` 表示状态流程已收尾；`issueResolutions[]` 包含 issueId、description、throughTurn、status（resolved/unresolved/superseded/unknown）、reason、可选 errorCode 及 reviews（reviewIndex、valid、status、reason、errorCode、evidence）。引用对象使用 source_id/turn/quote。该状态不修改历史评分，旧报告缺失此字段时显示未记录，不推断为没有问题；额度不足或缺少依据会保留 unknown。
+
+新报告审计元数据 `semanticPreparation=3` 表示先提取原窗口、相邻边界，再提取预算可容纳的非相邻完整窗口对（最多32次额外提取），每次独立记录费用。精确证据锚点相同的机会合并计分，缺口进入 limitations，跨窗口全局未知仍保留。旧版本1/2按原范围执行，请求及分页接口不变。
+
+单轮长评分可返回 `batchCount`，表示每组评审的分段数，正式复评仍只有三组，不按分段平均分数。超预算检查项为 unknown，原始全文保留在内部父快照；RAG 完整资料未能送评时 `result.evidence` 的 applicability 全部为 unknown、final 为 null、errorCode 为 `rag_evidence_budget_exceeded`，正式结果为 incomplete。不能把完成三组对话评审理解为资料已经核验。歧义要求的判定依据只来自当前模型分支，明确结论需同时引用用户指代与更早回答。
+
+RAG 多轮流新增 `context_ready` 阶段状态，字段为 `modelConfigId`、`phase: rewrite | answer`、`compressed`、`estimatedTokens`、`historyThroughTurn`，后三项可空。状态从持久化快照投影，阶段上下文准备完成后、实际候选调用前发送；不包含消息或摘要正文。普通旧事件未包含 phase 时，客户端按 chat 处理。
+
+轮次分页结果 `items[].contexts` 返回当前页各模型最新尝试的上下文状态：`modelConfigId`、`phase`（chat/rewrite/answer）、`compressed: boolean | null`、`estimatedTokens: integer | null`、`historyThroughTurn: integer | null`。无快照为空数组，缺失或非法旧元数据保持 null。历史截止轮次表示读取范围，不表示摘要覆盖范围；不公开原始消息、内部系统提示词或摘要正文。权限沿用会话可见性，私有会话禁止跨用户读取。
+
+`GET /api/models/available` 新增可空 `contextWindow`、`maxTokens` 非秘密字段，供普通/RAG 工作台计算创建预算；其余密钥、地址、价格等管理字段仍不返回。客户端显式提交 `inputBudget`，服务端仍按当前模型配置重新校验，不能依赖前端缓存保证容量。
+
+管理员模型配置创建、更新及读取新增 `contextWindow: integer | null`。创建默认 null；更新省略保留旧值，显式 null 清空；非空须为 2～2147483647 的严格整数且大于 maxTokens。普通/RAG 多轮创建若任何候选、摘要或评审模型的 inputBudget + maxTokens 超过其已知容量，返回 422 / conversation_context_exceeded，创建前拒绝。容量进入模型快照，旧快照缺字段按未知兼容。
+
+报告逐组统计 `result.report.opportunityReviews[].dimensions` 新增 `coverageChecked`、`coverageUnknown`，分别表示确认无遗漏与待判断的覆盖审核数量；这些审核不进入 opportunities/successful/unknown/notApplicable。未知覆盖仍保留 findings 并限制最终评分。旧报告快照不回写，缺少新字段时前端显示未知。
+
+多轮会话报告执行更新：新提交报告先进行有用量记录的语义机会提取，再固定具体机会与覆盖审核段并执行三组评审；报告仍沿用现有异步状态及查询接口。result.report 增加 semanticPreparation、preparationUsageIds、semanticOpportunityCount 等审计元数据；coverage_only 检查的无遗漏结果不代表一个成功机会。旧报告按原快照读取，提取失败作业为 interrupted，已知费用保留且重复投递不重试。跨窗口联合判断不足时仍保留未知。
+
+## 2026-09-20 会话报告增量（部分实现）
+
+异常生成恢复不增加公开写接口，由 Worker 扫描心跳执行。超过四小时无更新的生成轮次经锁内复核后返回 interrupted/errorCode=generation_heartbeat_expired，会话恢复 idle；重复原 requestKey 仍重放原轮次标识，显式新请求可用 currentTurn 续聊。中断轮次中已成功的分支保留独立历史，失败分支不进入模型上下文。恢复不自动重跑收费请求，未知用量仍需保留核对状态。
+
+报告接口参数保持不变。服务端从要求版本计算原文范围；长报告可增加独立要求评审段，因此调用次数为三次完整评审乘以实际分段数。单项要求全范围仍超预算时结果保留未知并记录限制。短报告同样拒绝范围外引文，后续修改的要求不能追溯改变旧范围判定。
+
+逐次结果的检查项新增 `evidence_refs: [{ source_id, turn, quote }]`，服务端在核验逐字引文后按固定来源快照填写轮次；保留原 `evidence` 文本数组兼容旧记录。`result.report.opportunityReviews[].findings` 保存该次完整评审中的失败与未知项（含 id、applicability、rating、critical、reason、evidence_refs），无效评审为 null。未知项不能计为确认失败；引用轮次表示依据位置，不一定是失败发生轮次。旧结果缺字段时按没有结构化依据展示。
+
+- `POST /api/evaluation/conversations/{id}/reports`：作者提交 `{ modelConfigId, throughTurn }`，返回 202 和评分作业；仅接受冻结候选分支与已结束的轮次范围。相同分支和截止轮次复用原作业，不从客户端接收评分材料。
+- `GET /api/evaluation/conversations/{id}/reports?page=1&pageSize=10`：仅返回 session 报告，公开会话允许登录读者读取；详情沿用 `GET /api/evaluation/conversations/{id}/assessments/{assessmentId}`。
+- 正式报告结果的 `report` 字段保存生成成功次数、失败轮次、来源数量、评价限制及 RAG 证据趋势快照；逐次结果携带 `reviewIndex/batchIndex`。多窗口全局关系未充分验证时保持未知，不能将原文覆盖率当作完整评价覆盖率。
+- React 面板展示固定分支、截止轮次、成功次数、失败轮次、限制及分段依据。已展示逐组机会统计和 RAG 证据趋势快照；失败项已展示依据轮次和原文；跨窗口联合判断、问题解决状态追踪及浏览器联合验收仍待完成。
+
+## 2026-09-18 多轮会话元数据（开发中）
+
+历史引用现已接通；评分资料的 historical_references 数组保存 reference（如 T1:S3）和 source_id（如 response:10:S3），对应所在资料的本轮 label。客户端不能提交或覆盖该映射；正式复评继续复用冻结输入。RAG 流式 HTTP 已接通，业务库部署仍需单独迁移授权。
+
+RAG 新评分链路已接通：评分查询的暂评 result 保留 score/errorCode 并增加 evidence；正式 RAG result 使用 dialogue/evidence 两组聚合结果。逐次 runs.result 增加 ragAssertions（包含来源原文）及 evidence。同轮评分输入固定于对应 responseId 的证据快照，不由客户端传入。RAG 续聊 HTTP 与历史引用已通过隔离集成验证。
+
+合并规格见 [multiturn-spec-plan.md](multiturn-spec-plan.md)。元数据、普通/RAG 多轮流式生成与评分查询接口已实现；会话报告接口尚未接入。React 双工作台已有接入代码和 Docker 检查，浏览器联合验收尚待完成。业务库部署前需单独授权迁移 `20260918_01`。
+
+| 接口 | 当前契约 |
+| --- | --- |
+| POST `/api/evaluation/conversations` | 创建但不生成首轮；201 返回会话。字段 mode=chat/rag、title、modelIds（1–8、不重复）、judgeModelId、summaryModelId、enableThinking、visibility（默认 private）、knowledgeBaseId、inputBudget（默认8192，1024–262144） |
+| GET `/api/evaluation/conversations` | taskType=chat/rag、page、pageSize（1–100），只列本人或公开会话 |
+| GET `/api/evaluation/conversations/{id}` | 返回 id/title/mode/ownerId/canContinue/visibility/currentTurn/generationStatus/configuration/createdAt/updatedAt；不返回私有上下文或供应商凭据 |
+| GET `/api/evaluation/conversations/{id}/turns` | page/pageSize 分页，返回轮次 id/taskId/turnIndex/prompt/generationStatus/errorCode/createdAt |
+| GET `/api/evaluation/conversations/{id}/assessments` | page/pageSize（默认 20，上限 100）、可选 responseId；按 id 倒序返回 items/total/page/pageSize |
+| GET `/api/evaluation/conversations/{id}/assessments/{assessmentId}` | 会话与评分必须匹配；返回评分及按 runIndex 排序的 runs，不触发评审 |
+| POST `/api/evaluation/conversations/{id}/assessments` | 仅作者；sourceAssessmentId 为已结束暂定评分，202 返回正式评分摘要；同一来源重复请求返回原作业。运行中或正式来源 409，越权或跨会话来源 404，不接受客户端历史、检查项或分数 |
+| PATCH `/api/evaluation/conversations/{id}/visibility` | 作者提交 public/private，事务内统一所有既有轮次任务 |
+| POST `/api/evaluation/conversations/{id}/turns/stream` | 普通/RAG 共用：prompt、expectedTurn、requestKey；按持久化 mode 分发，返回 NDJSON，仅作者可调用 |
+
+RAG 额外透传 rag_stage（modelConfigId/stage）与 rag_retrieval（modelConfigId/rewrittenQuery/evidence）；增量与完成使用共用 delta/answer_completed。显式历史引用放在 prompt 中，如 `[T1:S1]`、`上一轮[S1]`，资料仅从本分支历史快照获取。无效引用首事件前 422，知识/Embedding 版本变化 409；不接受客户端传入资料、历史消息或强制 mode。
+
+流式事件为 turn_started（turnId/taskId/turn/replayed）、context_ready（modelConfigId/compressed）、delta（modelConfigId/delta）、answer_completed（modelConfigId/responseId/status/errorCode）、turn_completed（turnId/taskId）。重复键同内容只返回带 replayed=true 的 turn_started，不重跑；参数不同时 409。权限/配置/额度错误在响应头之前返回 404/422/429；响应开始后的系统异常返回脱敏 stream_error。关闭连接会取消分支并收尾轮次。单条 prompt 限制为 65535 UTF-8 字节，超限 422；模型完整回答超过现有 TEXT 容量时本分支失败并保留已知用量。普通生成前自动提取要求；配置 Judge 时成功回答自动提交暂定评分，额外返回 assessments_queued（turnId/assessmentIds）。评分提交失败返回 assessment_submission_failed，已保存回答不回滚。
+
+评分公共字段为 id/responseId/modelConfigId/throughTurn/scoreVersion/status/formal/result/createdAt/completedAt；详情增加 runs（runIndex/status/result/errorCode）。未完成 result=null，失败不伪造零分。每次按会话当前权限鉴权，公开读者可查看评分证据，不返回 input_json、operation_key 或私有上下文快照。正式复评提交已接通，会话报告提交尚未接入。
+
+创建时固定候选、摘要和评审配置，不允许注入 history/messages/ownerId。普通允许不启用 Judge，RAG 必须指定知识库和不同的评审模型，默认开启思考。摘要模型默认取 Judge，否则取首个候选；最终选择通过 configuration 返回。
+
+公开读取不授予续聊或修改权限。越权 404，状态冲突 409，参数错误 422。旧单轮接口的 conversationId 只能关联本人旧会话，不能绕过多轮轮次管理；旧历史详情修改多轮任务可见性时同样同步整个会话。
+
 > 当前状态（2026-09-09）：全局 Embedding API 与本地兼容接入已实现，业务库已备份并迁移，前后端已启动。本文阶段 1—7 的早期冻结/未执行描述为历史记录，最新验证及未覆盖范围以 docs/v3-rag-spec-plan.md 顶部为准。
 
 V3 阶段 7 不新增业务接口。`backend/tests/integration/test_rag_docker.py` 为现有知识库、评测流/一次性返回、历史、反馈、私有评论和管理员统计补充隔离联合用例，保留真实 Cookie 鉴权；仅收费模型调用指向测试容器假服务。入口见 `v3-rag-spec-plan.md` 第 11 节，当前用例尚未运行。测试假服务 `/v1/chat/completions` 不注册到业务 FastAPI，也不映射宿主机端口。

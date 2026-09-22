@@ -31,6 +31,8 @@ export interface RegisterCredentials extends AuthCredentials {
 }
 
 export interface AvailableModel {
+  contextWindow?: number | null;
+  maxTokens?: number | null;
   id: number;
   providerName: string;
   displayName: string;
@@ -68,6 +70,7 @@ export type FeedbackStatsRange = "7d" | "30d" | "all";
 export type FeedbackActivityType = "all" | "like" | "dislike" | "comment";
 
 export interface ModelConfigPayload {
+  contextWindow?: number | null;
   providerName?: string;
   displayName?: string;
   modelName?: string;
@@ -85,7 +88,8 @@ export interface ModelConfigPayload {
   priceCacheCreation?: number;
 }
 
-export interface ModelConfig extends Required<Omit<ModelConfigPayload, "apiKey">> {
+export interface ModelConfig extends Required<Omit<ModelConfigPayload, "apiKey" | "contextWindow">> {
+  contextWindow?: number | null;
   id: number;
   hasApiKey: boolean;
   maskedApiKey: string;

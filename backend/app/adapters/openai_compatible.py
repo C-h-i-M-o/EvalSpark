@@ -42,15 +42,16 @@ class OpenAICompatibleClient(ModelClient):
         started_at = perf_counter()
         payload = {
             "model": request.model_name,
-            "messages": [{"role": "user", "content": request.prompt}],
+            "messages": self._request_messages(request),
             "max_tokens": request.max_tokens,
             "temperature": request.temperature,
             "stream": False,
         }
         payload.update(self.extra_body)
         payload.update(request.extra_body)
-        if request.system_prompt:
-            payload["messages"] = self._rag_messages(request)
+        if request.messages or request.system_prompt:
+            # 结构化对话和系统规则不能被供应商扩展参数覆盖。
+            payload["messages"] = self._request_messages(request)
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -81,15 +82,16 @@ class OpenAICompatibleClient(ModelClient):
         started_at = perf_counter()
         payload = {
             "model": request.model_name,
-            "messages": [{"role": "user", "content": request.prompt}],
+            "messages": self._request_messages(request),
             "max_tokens": request.max_tokens,
             "temperature": request.temperature,
             "stream": True,
         }
         payload.update(self.extra_body)
         payload.update(request.extra_body)
-        if request.system_prompt:
-            payload["messages"] = self._rag_messages(request)
+        if request.messages or request.system_prompt:
+            # 流式与非流式请求采用相同的角色边界。
+            payload["messages"] = self._request_messages(request)
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         answer_parts: list[str] = []
         reasoning_parts: list[str] = []
@@ -161,9 +163,15 @@ class OpenAICompatibleClient(ModelClient):
                                                          usage_known=self._usage_known(usage_data)))
 
     @staticmethod
-    def _rag_messages(request: ModelRequest) -> list[dict[str, str]]:
-        # 数据消息不能通过供应商 extra_body 覆盖系统边界。
-        return [{"role": "system", "content": request.system_prompt}, {"role": "user", "content": request.prompt}]
+    def _request_messages(request: ModelRequest) -> list[dict[str, str]]:
+        """优先发送结构化消息，旧请求继续使用 system_prompt/prompt。"""
+        if request.messages:
+            return [{"role": message.role, "content": message.content} for message in request.messages]
+        messages: list[dict[str, str]] = []
+        if request.system_prompt:
+            messages.append({"role": "system", "content": request.system_prompt})
+        messages.append({"role": "user", "content": request.prompt})
+        return messages
 
     @staticmethod
     def _usage_known(value: object) -> bool:

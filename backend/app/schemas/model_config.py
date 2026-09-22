@@ -4,6 +4,8 @@ from pydantic import BaseModel, Field
 
 
 class AvailableModelRead(BaseModel):
+    context_window: int | None = Field(default=None, alias="contextWindow")
+    max_tokens: int | None = Field(default=None, alias="maxTokens")
     id: int
     provider_name: str = Field(alias="providerName")
     display_name: str = Field(alias="displayName")
@@ -11,6 +13,7 @@ class AvailableModelRead(BaseModel):
 
 
 class ModelConfigRead(BaseModel):
+    context_window: int | None = Field(default=None, alias="contextWindow")
     id: int
     provider_name: str = Field(alias="providerName")
     display_name: str = Field(alias="displayName")
@@ -31,6 +34,7 @@ class ModelConfigRead(BaseModel):
 
 
 class ModelConfigCreate(BaseModel):
+    context_window: int | None = Field(default=None, alias="contextWindow", strict=True, ge=2, le=2147483647)
     provider_name: str = Field(alias="providerName")
     display_name: str = Field(alias="displayName")
     model_name: str = Field(alias="modelName")
@@ -49,6 +53,7 @@ class ModelConfigCreate(BaseModel):
 
 
 class ModelConfigUpdate(BaseModel):
+    context_window: int | None = Field(default=None, alias="contextWindow", strict=True, ge=2, le=2147483647)
     provider_name: str | None = Field(default=None, alias="providerName")
     display_name: str | None = Field(default=None, alias="displayName")
     model_name: str | None = Field(default=None, alias="modelName")

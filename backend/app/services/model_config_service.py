@@ -38,6 +38,7 @@ class RuntimeModelConfig:
     timeout_seconds: int
     notes: str
     extra_body: dict[str, object]
+    context_window: int | None = None
 
 
 class ModelConfigServiceError(Exception):
@@ -49,10 +50,18 @@ class ModelConfigNotFoundError(ModelConfigServiceError):
 
 
 class ModelConfigService:
+    @staticmethod
+    def validate_capacity(max_tokens: int, context_window: int | None) -> None:
+        """已知总容量须留有输入空间，禁止最大输出占满或超出总上下文。"""
+        if context_window is not None and max_tokens >= context_window:
+            raise ModelConfigServiceError("最大输出 Token 必须小于总上下文容量")
+
     async def list_available_configs(self, db: AsyncSession) -> list[AvailableModelRead]:
         configs = await self._list_enabled_model_configs(db)
         return [
             AvailableModelRead(
+                contextWindow=config.context_window,
+                maxTokens=config.max_tokens,
                 id=config.id,
                 providerName=config.provider.name,
                 displayName=config.display_name,
@@ -67,6 +76,7 @@ class ModelConfigService:
         return [self._serialize_config(config) for config in configs]
 
     async def create_config(self, db: AsyncSession, payload: ModelConfigCreate) -> ModelConfigRead:
+        self.validate_capacity(payload.max_tokens, payload.context_window)
         provider_name = self._required_text(payload.provider_name, "供应商名称")
         existing_provider = await self._get_provider_by_name(db, provider_name)
         if existing_provider is not None:
@@ -94,6 +104,7 @@ class ModelConfigService:
             timeout_seconds=payload.timeout_seconds,
             notes=payload.notes.strip(),
             max_tokens=payload.max_tokens,
+            context_window=payload.context_window,
             enabled=payload.enabled,
         )
         db.add(config)
@@ -104,6 +115,10 @@ class ModelConfigService:
     async def update_config(self, db: AsyncSession, model_config_id: int, payload: ModelConfigUpdate) -> ModelConfigRead:
         config = await self._get_model_config(db, model_config_id)
         provider = config.provider
+
+        capacity = payload.context_window if "context_window" in payload.model_fields_set else config.context_window
+        self.validate_capacity(payload.max_tokens if payload.max_tokens is not None else config.max_tokens, capacity)
+        config.context_window = capacity
 
         if payload.provider_name is not None:
             provider_name = self._required_text(payload.provider_name, "供应商名称")
@@ -296,6 +311,7 @@ class ModelConfigService:
             hasApiKey=has_stored_api_key(stored_key),
             maskedApiKey=mask_stored_api_key(stored_key),
             maxTokens=config.max_tokens,
+            contextWindow=config.context_window,
             temperature=float(config.temperature),
             timeoutSeconds=config.timeout_seconds,
             notes=config.notes or "",
@@ -321,6 +337,7 @@ class ModelConfigService:
             cache_creation_price=Decimal(config.price_cache_creation),
             currency=config.currency,
             max_tokens=config.max_tokens,
+            context_window=config.context_window,
             temperature=float(config.temperature),
             timeout_seconds=config.timeout_seconds,
             notes=config.notes or "",

@@ -1,6 +1,7 @@
 import { Alert, Button, Input, Select, Skeleton, Space, Switch } from "antd";
 import { Link } from "react-router-dom";
 import { ModelResponseCard } from "../components/ModelResponseCard";
+import { ConversationPanel } from "../components/ConversationPanel";
 import { useRagEvaluation } from "../features/rag/useRagEvaluation";
 import { formatRagNumber } from "../features/rag/rag";
 
@@ -34,6 +35,10 @@ export function RagEvaluationPage() {
         <Space><Button type="primary" disabled={!view.canSubmit} onClick={view.submit}>开始评测</Button>{view.running && <Button danger onClick={view.cancel}>停止</Button>}</Space></div>
       <p className="rag-note">回答与评审完成后计入今日额度，并发或长任务可能超出剩余值。</p>
     </section>
+    <ConversationPanel mode="rag" knowledgeBaseId={view.libraryId} availableModels={view.models}
+      selectedModelIds={view.selectedModelIds} judgeModelId={view.judgeId} enableThinking={view.enableThinking}
+      visibility={view.visibility} disabled={view.running} createDisabled={!view.library?.available}
+      onUsageChange={view.loadTokenUsage} />
     {view.quotaExhausted && <Alert type="error" title="今日 Token 额度已用完，请明日再试或联系管理员调整额度。" />}
     {view.error && <Alert type="error" showIcon title={view.error} />}
     {view.notice && <Alert type="info" showIcon title={view.notice} />}

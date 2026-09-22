@@ -111,8 +111,13 @@ async def test_closing_stream_waits_for_model_cancellation_and_persists_failure(
 
 
 @pytest.mark.asyncio
-async def test_recovery_only_closes_stale_tasks_and_late_write_is_rejected(stored, monkeypatch) -> None:
+@pytest.mark.parametrize("multiturn_schema", [True, False])
+async def test_recovery_only_closes_stale_tasks_and_late_write_is_rejected(stored, monkeypatch, multiturn_schema) -> None:
+    """有无多轮新表时，旧单轮超时收尾和迟到写入拦截都保持有效。"""
     store, context, prepared, engine = stored
+    if not multiturn_schema:
+        from app.models.conversation import ConversationTurn
+        ConversationTurn.__table__.drop(engine)  # 仅删除本测试的内存 SQLite 表，模拟业务库尚未迁移。
     calls = []
     async def record(db, *, response_id, user_id):
         calls.append(response_id)

@@ -1,5 +1,8 @@
 from app.models.comment import UserComment
-from app.models.conversation import Conversation
+from app.models.conversation import (
+    Conversation, ConversationTurn, ConversationContext, ConversationRequirement,
+    ConversationAssessment, ConversationJudgeRun, ConversationUsage,
+)
 from app.models.evaluation import EvaluationResult, EvaluationTask
 from app.models.feedback import UserFeedback
 from app.models.model_config import ModelConfig, ModelProvider
@@ -19,6 +22,12 @@ __all__ = [
     "RagJob",
     "RagResponseDetail",
     "Conversation",
+    "ConversationTurn",
+    "ConversationContext",
+    "ConversationRequirement",
+    "ConversationAssessment",
+    "ConversationJudgeRun",
+    "ConversationUsage",
     "EvaluationResult",
     "EvaluationTask",
     "ModelConfig",

@@ -24,6 +24,7 @@ UsageStage = Literal["rewrite", "embed", "generate", "judge"]
 
 
 class RagModelSnapshot(KnowledgeSchema):
+    context_window: StrictInt | None = Field(default=None, gt=0)
     model_config_id: StrictInt = Field(gt=0)
     provider_name: str
     display_name: str
@@ -82,6 +83,9 @@ class RagTaskContext(KnowledgeSchema):
     # 仅服务端本次任务使用，序列化响应和历史快照不得包含凭据。
     embedding_runtime: Settings | None = Field(default=None, exclude=True, repr=False)
     task_id: StrictInt = Field(gt=0)
+    conversation_turn_id: StrictInt | None = Field(default=None, gt=0)
+    generation_epoch: StrictInt = Field(default=1, gt=0)
+    response_ids: tuple[int, ...] = ()
     user_id: StrictInt = Field(gt=0)
     knowledge_base_id: StrictInt = Field(gt=0)
     content_revision: StrictInt = Field(gt=0)

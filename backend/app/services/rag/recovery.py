@@ -33,7 +33,12 @@ async def recover_once() -> None:
     try:
         from app.services.rag.evaluation_store import RagEvaluationStore
         sessions = async_sessionmaker(engine, expire_on_commit=False)
+        from app.services.multiturn.generation_recovery import recover_generations
+        await recover_generations(sessions)
         await recover_jobs(sessions, publish_rag_job)
         await RagEvaluationStore(sessions).recover_interrupted()
+        from app.services.multiturn.dispatch import publish_assessment
+        from app.services.multiturn.recovery import recover_assessments
+        await recover_assessments(sessions, publish_assessment)
     finally:
         await engine.dispose()

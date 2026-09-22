@@ -13,7 +13,7 @@ async def test_migration_adds_tables_without_changing_legacy_answers_or_scores(r
             "WHERE t.id=:id"
         ), {"id": rag_test_database["legacy_task_id"]})).all()
         assert rows
-        assert all(tuple(row) == ("迁移保留原问题", "chat", "迁移保留原回答", Decimal("7.85")) for row in rows)
-        assert await db.scalar(text("SELECT version_num FROM alembic_version")) == "20260909_01"
+        assert all(tuple(row) == ("迁移保留原问题", "chat", "迁移保留原回答", Decimal("7.85")) for row in rows), rows
+        assert await db.scalar(text("SELECT version_num FROM alembic_version")) == "20260922_01"
         tables = (await db.execute(text("SHOW TABLES"))).scalars().all()
         assert {"knowledge_bases", "knowledge_documents", "knowledge_chunks", "rag_jobs", "rag_response_details"}.issubset(tables)

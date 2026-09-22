@@ -124,10 +124,11 @@ export function useRagEvaluation() {
     finally { if (mounted.current) setFeedbackIds((ids) => ids.filter((id) => id !== responseId)); }
   }
   return { models, libraries, library, libraryId, selectLibrary, judgeId, setJudgeId, prompt, changePrompt, handleKeyDown,
+    selectedModelIds: modelIds,
     modelOptions: models.map((model) => ({ ...model, selected: modelIds.includes(model.id), toggle: () => setModelIds((current) =>
       current.includes(model.id) ? current.filter((id) => id !== model.id) : [...current, model.id]) })),
     idleOptions: idleModels.map((model) => ({ value: model.id, label: model.displayName })),
     libraryOptions: libraries.map((base) => ({ value: base.id, label: `${base.name}${base.available ? "" : "（未就绪）"}`, disabled: !base.available })),
     enableThinking, setEnableThinking, visibility, setVisibility, tokenUsage, quotaExhausted, initialLoading, running, task, error: error || tokenUsageErrorMessage, notice, elapsed,
-    feedbackIds, feedback, canSubmit, submit, cancel, refresh };
+    feedbackIds, feedback, canSubmit, submit, cancel, refresh, loadTokenUsage };
 }

@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -7,6 +7,7 @@ from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.evaluation import EvaluationTask
+from app.models.conversation import ConversationUsage
 from app.models.rag import RagResponseDetail
 from app.models.response import ModelResponse
 from app.models.token_usage import DailyUserTokenUsage, TokenUsageLog, UserTokenQuota
@@ -115,6 +116,33 @@ class TokenQuotaService:
         summary = summarize_usage(stages)
         await self.record_usage(db, user_id=user_id, task_id=response.task_id, response_id=response_id,
             model_config_id=response.model_config_id, total_tokens=summary.external_total_tokens)
+        await db.flush()
+        return True
+
+    async def record_conversation_usage(self, db: AsyncSession, *, usage_id: int, user_id: int) -> bool:
+        """阶段流水与日用量在同事务幂等入账，未知用量保留待核对。"""
+        usage = await db.scalar(select(ConversationUsage).where(
+            ConversationUsage.id == usage_id, ConversationUsage.user_id == user_id,
+        ).with_for_update().execution_options(populate_existing=True))
+        if usage is None:
+            raise ValueError("阶段用量不存在或无权访问")
+        if usage.accounted:
+            return False
+        if usage.status != "completed" or usage.total_tokens is None:
+            return False
+        if type(usage.total_tokens) is not int or usage.total_tokens < 0:
+            raise ValueError("阶段用量必须为非负整数")
+        # 数据库存储 UTC 无时区时间，不能交给默认按北京时间解释的 usage_date。
+        started = usage.created_at
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        day = self.usage_date(started)
+        statement = mysql_insert(DailyUserTokenUsage).values(
+            user_id=user_id, usage_date=day, total_tokens=usage.total_tokens)
+        await db.execute(statement.on_duplicate_key_update(
+            total_tokens=DailyUserTokenUsage.total_tokens + usage.total_tokens))
+        usage.accounted = True
+        usage.detail_json = {**usage.detail_json, "usageDate": day.isoformat()}
         await db.flush()
         return True
 

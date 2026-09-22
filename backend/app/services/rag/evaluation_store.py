@@ -2,7 +2,7 @@ from decimal import Decimal
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
-from sqlalchemy import select, tuple_
+from sqlalchemy import inspect, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
@@ -11,7 +11,7 @@ from app.db.session import AsyncSessionLocal
 from app.adapters.base import ModelUsage
 from app.models.evaluation import EvaluationResult, EvaluationTask
 from app.models.feedback import UserFeedback
-from app.models.conversation import Conversation
+from app.models.conversation import Conversation, ConversationTurn
 from app.models.knowledge_base import KnowledgeBase, KnowledgeChunk, KnowledgeDocument
 from app.models.rag import RagResponseDetail
 from app.models.response import ModelResponse
@@ -54,38 +54,105 @@ class RagEvaluationStore:
 
     async def create(self, user_id: int, knowledge_base_id: int, prompt: str,
                      models: list[RuntimeModelConfig], *, enable_thinking: bool,
-                     conversation_id: int | None = None, visibility: Literal["public", "private"] = "private") -> tuple[RagTaskContext, list[PreparedRagResponse]]:
+                     conversation_id: int | None = None, visibility: Literal["public", "private"] = "private",
+                     reserved_turn_id: int | None = None, reserved_response_id: int | None = None,
+                     generation_epoch: int = 1) -> tuple[RagTaskContext, list[PreparedRagResponse]]:
+        """初始化单轮任务或复用内部已预留的多轮任务，禁止重复创建回答。"""
         if not models or len({model.id for model in models}) != len(models):
             raise RagClientError("rag_invalid_models", "请选择不重复的候选模型")
         async with self.sessions() as db, db.begin():
+            from app.services.multiturn.store import ConversationStore, require_legacy_conversation
+            conversation = None
+            if reserved_turn_id is not None:
+                if conversation_id is None:
+                    raise RagClientError("rag_reserved_turn_invalid", "预留轮次必须指定会话")
+                conversation = await ConversationStore().get(db, conversation_id, user_id, owner_only=True, lock=True)
+            else:
+                await require_legacy_conversation(db, conversation_id, user_id)
             embedding_runtime = runtime_config(await get_config(db, lock=True))
-            if conversation_id is not None and await db.scalar(select(Conversation.id).where(
-                Conversation.id == conversation_id, Conversation.user_id == user_id)) is None:
-                raise KnowledgeBaseError("conversation_not_found", "会话不存在或无权访问", 404)
             kb = await require_owned_knowledge_base(db, knowledge_base_id, user_id, lock=True)
             versions = await self._versions(db, user_id, kb.id)
             if kb.status != "ready" or not versions:
                 raise KnowledgeBaseError("knowledge_base_not_ready", "知识库尚未就绪或没有可检索内容")
-            task = EvaluationTask(user_id=user_id, prompt=prompt, task_type="rag", visibility=visibility,
-                                  conversation_id=conversation_id, status="pending")
-            db.add(task)
-            await db.flush()
+            if conversation is not None:
+                knowledge = {"knowledgeBaseId": kb.id, "contentRevision": kb.content_revision,
+                    "documents": [[document, revision] for document, revision in versions],
+                    "embeddingCollection": embedding_runtime.rag_embedding_collection,
+                    "embeddingRevision": embedding_runtime.rag_embedding_revision}
+                task = await self._reserved_task(db, conversation, reserved_turn_id, prompt, models,
+                                                 enable_thinking, knowledge, reserved_response_id=reserved_response_id,
+                                                 generation_epoch=generation_epoch)
+            else:
+                task = EvaluationTask(user_id=user_id, prompt=prompt, task_type="rag", visibility=visibility,
+                                      conversation_id=conversation_id, status="pending")
+                db.add(task)
+                await db.flush()
             context = RagTaskContext(task_id=task.id, user_id=user_id, knowledge_base_id=kb.id,
+                conversation_turn_id=reserved_turn_id, generation_epoch=generation_epoch,
                 embedding_runtime=embedding_runtime,
                 content_revision=kb.content_revision, document_versions=versions, prompt=prompt,
                 enable_thinking=enable_thinking)
             prepared: list[PreparedRagResponse] = []
             for model in models:
-                response = ModelResponse(task_id=task.id, model_config_id=model.id, status="pending",
-                    currency=model.currency, config_snapshot=model_snapshot(model).model_dump(mode="json", by_alias=True))
-                db.add(response)
-                await db.flush()
+                if reserved_response_id is None:
+                    response = ModelResponse(task_id=task.id, model_config_id=model.id, status="pending",
+                        currency=model.currency, config_snapshot=model_snapshot(model).model_dump(mode="json", by_alias=True))
+                    db.add(response)
+                    await db.flush()
+                else:
+                    response = await db.get(ModelResponse, reserved_response_id)
                 db.add(RagResponseDetail(response_id=response.id, knowledge_base_id=kb.id, knowledge_base_name=kb.name,
                     content_revision=kb.content_revision, embedding_revision=embedding_runtime.rag_embedding_collection if embedding_runtime.rag_embedding_protocol == "openai" else settings.rag_embedding_revision,
                     chunk_size=kb.chunk_size, chunk_overlap=kb.chunk_overlap,
                     document_versions_json=[{"documentId": document, "indexRevision": revision} for document, revision in versions]))
                 prepared.append(PreparedRagResponse(response_id=response.id, model_config_id=model.id))
-            return context, prepared
+            return context.model_copy(update={"response_ids": tuple(item.response_id for item in prepared)}), prepared
+
+    async def _reserved_task(self, db: AsyncSession, conversation: Conversation, turn_id: int,
+                             prompt: str, models: list[RuntimeModelConfig], thinking: bool,
+                             knowledge: dict[str, object], *, reserved_response_id: int | None = None,
+                             generation_epoch: int = 1) -> EvaluationTask:
+        """在会话锁内核对轮次、任务、模型和知识版本，返回唯一预留任务。"""
+        from app.services.multiturn.catalog import model_identity
+        config = conversation.config_json or {}
+        if (conversation.mode != "rag" or conversation.generation_status != "generating"
+                or (config.get("modelIds") != [model.id for model in models] if reserved_response_id is None
+                    else len(models) != 1 or models[0].id not in config.get("modelIds", []))
+                or config.get("enableThinking") != thinking):
+            raise RagClientError("rag_reserved_turn_invalid", "预留会话模式、候选或生成配置不匹配")
+        identities = config.get("identities", {})
+        snapshots = config.get("models", [])
+        if any(identities.get(str(model.id)) != model_identity(model)
+               or model_snapshot(model).model_dump(mode="json", by_alias=True) not in snapshots for model in models):
+            raise RagClientError("rag_reserved_config_changed", "预留会话模型快照与运行配置不匹配")
+        if conversation.knowledge_snapshot_json != knowledge:
+            raise RagClientError("knowledge_base_changed", "知识库或 Embedding 版本已变化，请创建新会话")
+        turn = await db.scalar(select(ConversationTurn).where(ConversationTurn.id == turn_id,
+            ConversationTurn.conversation_id == conversation.id).with_for_update())
+        if (turn is None or turn.turn_index != conversation.current_turn
+                or turn.generation_status != "generating" or turn.prompt != prompt or turn.generation_epoch != generation_epoch):
+            raise RagClientError("rag_reserved_turn_invalid", "预留轮次已变化或问题不匹配")
+        task = await db.scalar(select(EvaluationTask).where(EvaluationTask.id == turn.task_id,
+            EvaluationTask.conversation_id == conversation.id, EvaluationTask.user_id == conversation.user_id,
+            EvaluationTask.task_type == "rag").with_for_update())
+        if task is None or task.status != "pending" or task.prompt != prompt:
+            raise RagClientError("rag_reserved_task_invalid", "预留任务不存在或已结束")
+        if reserved_response_id is not None:
+            response = await db.get(ModelResponse, reserved_response_id)
+            if (response is None or response.task_id != task.id or response.model_config_id != models[0].id
+                    or response.status != "pending" or (response.config_snapshot or {}).get("branchAction") != "retry"
+                    or await db.scalar(select(RagResponseDetail.response_id).where(RagResponseDetail.response_id == reserved_response_id)) is not None):
+                raise RagClientError("rag_reserved_task_started", "重试回答不匹配或已初始化")
+        elif await db.scalar(select(ModelResponse.id).where(ModelResponse.task_id == task.id).limit(1)) is not None:
+            raise RagClientError("rag_reserved_task_started", "预留任务已初始化，不能重复创建回答")
+        return task
+
+    async def _current_generation(self, db: AsyncSession, context: RagTaskContext) -> bool:
+        """旧生成代次不能读取或结束同一轮的新重试，单轮旧任务保持兼容。"""
+        if context.conversation_turn_id is None:
+            return True
+        return await db.scalar(select(ConversationTurn.id).where(ConversationTurn.id == context.conversation_turn_id,
+            ConversationTurn.task_id == context.task_id, ConversationTurn.generation_epoch == context.generation_epoch)) is not None
 
     async def _versions(self, db: AsyncSession, user_id: int, knowledge_base_id: int) -> list[tuple[int, int]]:
         rows = await db.execute(select(KnowledgeDocument.id, KnowledgeDocument.index_revision).where(
@@ -101,9 +168,23 @@ class RagEvaluationStore:
             .with_for_update().execution_options(populate_existing=True))
         if task is None:
             raise RagClientError("rag_response_not_found", "评测回答不存在或无权访问")
-        if not allow_expired and (task.status != "pending" or
-            task.created_at < datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=RAG_STALE_SECONDS)):
-            raise RagClientError("rag_task_finished", "任务已结束或超过有效期，不能继续写入")
+        if (not await self._current_generation(db, context)
+                or (context.response_ids and response_id not in context.response_ids)):
+            raise RagClientError("rag_attempt_ended", "当前生成尝试已经结束")
+        if not allow_expired:
+            expired = task.created_at < datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=RAG_STALE_SECONDS)
+            if expired and task.status == "pending":
+                connection = await db.connection()
+                if await connection.run_sync(lambda sync: inspect(sync).has_table("conversation_turns")):
+                    from app.services.multiturn.generation_recovery import GENERATION_STALE_SECONDS
+                    live = await db.scalar(select(ConversationTurn.id).join(Conversation,
+                        Conversation.id == ConversationTurn.conversation_id).where(ConversationTurn.task_id == task.id,
+                        ConversationTurn.generation_status == "generating", Conversation.generation_status == "generating",
+                        Conversation.current_turn == ConversationTurn.turn_index,
+                        Conversation.updated_at >= datetime.utcnow() - timedelta(seconds=GENERATION_STALE_SECONDS)))
+                    expired = live is None
+            if task.status != "pending" or expired:
+                raise RagClientError("rag_task_finished", "任务已结束或超过有效期，不能继续写入")
         response = await db.scalar(select(ModelResponse).where(ModelResponse.id == response_id,
             ModelResponse.task_id == context.task_id).with_for_update().execution_options(populate_existing=True))
         detail = await db.scalar(select(RagResponseDetail).where(RagResponseDetail.response_id == response_id,
@@ -151,10 +232,15 @@ class RagEvaluationStore:
             return evidence
 
     async def fix_snapshots(self, context: RagTaskContext, prepared: list[PreparedRagResponse]) -> bool:
+        """固定所有候选证据前重新校验索引与 Embedding 语义版本。"""
         async with self.sessions() as db, db.begin():
+            current_embedding = runtime_config(await get_config(db, lock=True))
             kb = await db.scalar(select(KnowledgeBase).where(KnowledgeBase.id == context.knowledge_base_id,
                 KnowledgeBase.user_id == context.user_id).with_for_update())
             valid = kb is not None and kb.status == "ready" and kb.content_revision == context.content_revision
+            original_embedding = context.embedding_runtime or settings
+            valid = valid and (current_embedding.rag_embedding_collection, current_embedding.rag_embedding_revision) == (
+                original_embedding.rag_embedding_collection, original_embedding.rag_embedding_revision)
             if valid:
                 valid = await self._versions(db, context.user_id, context.knowledge_base_id) == context.document_versions
             response_ids = list((await db.scalars(select(ModelResponse.id).where(
@@ -208,12 +294,16 @@ class RagEvaluationStore:
                 EvaluationTask.user_id == context.user_id, EvaluationTask.task_type == "rag").with_for_update())
             if task is None:
                 raise RagClientError("rag_task_not_found", "评测任务不存在或无权访问")
-            if task.status in ("completed", "failed"):
+            if not await self._current_generation(db, context):
+                return
+            if task.status in ("completed", "failed", "interrupted"):
                 return
             if stale_before is not None and task.created_at >= stale_before:
                 return
-            response_ids = list((await db.scalars(select(ModelResponse.id).where(
-                ModelResponse.task_id == context.task_id).order_by(ModelResponse.id))).all())
+            response_query = select(ModelResponse.id).where(ModelResponse.task_id == context.task_id)
+            if context.response_ids:
+                response_query = response_query.where(ModelResponse.id.in_(context.response_ids))
+            response_ids = list((await db.scalars(response_query.order_by(ModelResponse.id))).all())
             has_success = False
             for response_id in response_ids:
                 response, detail = await self._owned_response(db, context, response_id, allow_expired=True)
@@ -239,13 +329,18 @@ class RagEvaluationStore:
             task.completed_at = datetime.now(UTC).replace(tzinfo=None)
 
     async def recover_interrupted(self, *, limit: int = 100) -> None:
-        # 仅关闭超过全链路时限及收尾宽限的任务，不重放付费请求。
+        """仅按旧时限收尾单轮任务，多轮存活与异常收尾由独立机制负责。"""
         cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=RAG_STALE_SECONDS)
         async with self.sessions() as db:
-            tasks = list((await db.scalars(select(EvaluationTask).where(
+            connection = await db.connection()
+            migrated = await connection.run_sync(lambda sync: inspect(sync).has_table("conversation_turns"))
+            statement = select(EvaluationTask).where(
                 EvaluationTask.task_type == "rag",
                 EvaluationTask.status == "pending", EvaluationTask.created_at < cutoff,
-            ).order_by(EvaluationTask.id).limit(limit))).all())
+            )
+            if migrated:
+                statement = statement.where(~EvaluationTask.id.in_(select(ConversationTurn.task_id)))
+            tasks = list((await db.scalars(statement.order_by(EvaluationTask.id).limit(limit))).all())
             contexts: list[RagTaskContext] = []
             for task in tasks:
                 detail = await db.scalar(select(RagResponseDetail).join(ModelResponse,
@@ -314,11 +409,41 @@ class RagEvaluationStore:
                 rule_dictionary_version=rule.rule_dictionary_version, judge_prompt_version="rag-v1"))
             await token_quota_service.record_rag_usage(db, response_id=response_id, user_id=context.user_id)
 
+    async def finalize_multiturn_response(self, context: RagTaskContext, response_id: int) -> None:
+        """多轮回答独立结算生成，评分作业另存且不覆盖可用于续聊的回答。"""
+        from app.services.multiturn.store import ConversationStore
+        async with self.sessions() as db, db.begin():
+            task = await db.scalar(select(EvaluationTask).where(EvaluationTask.id == context.task_id,
+                EvaluationTask.user_id == context.user_id, EvaluationTask.task_type == "rag"))
+            if task is None or task.conversation_id is None:
+                raise RagClientError("rag_reserved_task_invalid", "任务不属于多轮 RAG 会话")
+            conversation = await ConversationStore().get(db, task.conversation_id, context.user_id,
+                                                          owner_only=True, lock=True)
+            if conversation.mode != "rag":
+                raise RagClientError("rag_reserved_task_invalid", "任务不属于多轮 RAG 会话")
+            response, detail = await self._owned_response(db, context, response_id)
+            existing = await db.scalar(select(EvaluationResult).where(EvaluationResult.response_id == response_id))
+            if existing is not None:
+                if existing.judge_prompt_version != "rag-multiturn-v1":
+                    raise RagClientError("rag_score_conflict", "回答已由其他评分流程结算")
+                return
+            if response.status not in ("answer_completed", "failed"):
+                raise RagClientError("rag_answer_pending", "回答生成尚未结束，不能结算")
+            success = response.status == "answer_completed" and detail.failure_stage is None
+            if success and (not response.answer_text.strip() or not detail.evidence_json):
+                raise RagClientError("rag_snapshot_missing", "成功回答必须包含正文和固定证据")
+            response.status = "success" if success else "failed"
+            db.add(EvaluationResult(response_id=response_id, final_score=None, excluded_from_stats=True,
+                score_status="judge_disabled" if success else "model_failed", judge_prompt_version="rag-multiturn-v1"))
+            await token_quota_service.record_rag_usage(db, response_id=response_id, user_id=context.user_id)
+
     async def finish_task(self, context: RagTaskContext) -> None:
         async with self.sessions() as db, db.begin():
             task = await db.scalar(select(EvaluationTask).where(EvaluationTask.id == context.task_id,
                 EvaluationTask.user_id == context.user_id, EvaluationTask.task_type == "rag").with_for_update())
             if task is None or task.status != "pending":
+                return
+            if not await self._current_generation(db, context):
                 return
             statuses = list((await db.scalars(select(ModelResponse.status).where(ModelResponse.task_id == context.task_id))).all())
             if any(value not in ("success", "failed") for value in statuses):

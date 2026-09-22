@@ -1,9 +1,13 @@
 import { describe, expect, test } from "vitest";
 
-import { formatHistoryTime, historyStatusText, isStalePendingTask, updateTaskResponseFeedback } from "./history";
+import { conversationStatusText, formatHistoryTime, historyStatusText, isStalePendingTask, updateTaskResponseFeedback } from "./history";
 import type { EvaluationTaskRead, EvaluationTaskListItem } from "../evaluation/types";
 
 describe("React 阶段四历史任务逻辑", () => {
+  test("公开会话对非作者显示只读状态", () => {
+    expect(conversationStatusText(false, "idle")).toBe("只读");
+    expect(conversationStatusText(true, "idle")).toBe("可继续");
+  });
   test("RAG 使用 60 分钟收尾边界，不套用普通任务两分钟", () => {
     const task = { taskType: "rag" as const, status: "pending", createdAt: "2026-09-03T00:00:00" };
     expect(isStalePendingTask(task, new Date("2026-09-03T00:03:00Z"))).toBe(false);

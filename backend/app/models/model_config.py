@@ -34,6 +34,7 @@ class ModelConfig(Base):
     timeout_seconds: Mapped[int] = mapped_column(default=60)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     max_tokens: Mapped[int] = mapped_column(default=4096)
+    context_window: Mapped[int | None] = mapped_column(nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
     provider = relationship("ModelProvider", back_populates="models")

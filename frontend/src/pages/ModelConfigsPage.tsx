@@ -48,6 +48,7 @@ const emptyForm: ModelConfigFormValues = {
   apiKey: "",
   enabled: true,
   maxTokens: 1024,
+  contextWindow: null,
   temperature: 0.7,
   timeoutSeconds: 60,
   notes: "",
@@ -152,6 +153,7 @@ function ModelProvidersPanel() {
       apiKey: "",
       enabled: config.enabled,
       maxTokens: config.maxTokens,
+      contextWindow: config.contextWindow ?? null,
       temperature: config.temperature,
       timeoutSeconds: config.timeoutSeconds,
       notes: config.notes,
@@ -333,6 +335,9 @@ function ModelProvidersPanel() {
                     <div className="form-grid form-grid-two">
                       <Form.Item label="温度" name="temperature">
                         <InputNumber min={0} max={2} step={0.1} className="w-full" />
+                      </Form.Item>
+                      <Form.Item label="总上下文 Token" name="contextWindow" help="填写供应商声明的输入与输出总容量；不确定时留空。多轮会话会据此校验预算。">
+                        <InputNumber min={2} max={2147483647} precision={0} placeholder="未知" style={{ width: "100%" }} />
                       </Form.Item>
                       <Form.Item label="最大输出 Token" name="maxTokens">
                         <InputNumber min={1} step={128} className="w-full" />

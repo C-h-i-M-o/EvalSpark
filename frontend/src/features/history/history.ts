@@ -57,6 +57,12 @@ export function historyEmptyCopy(task: HistoryStatusSource): { title: string; de
       : running ? "模型请求尚未完成，可以稍后刷新详情查看最新结果。" : "该任务没有可展示的模型回答。" };
 }
 
+/** 返回多轮会话列表中的可继续状态文案，公开读者始终显示只读。 */
+export function conversationStatusText(canContinue: boolean, generationStatus: string): string {
+  if (!canContinue) return "只读";
+  return generationStatus === "idle" ? "可继续" : "生成中";
+}
+
 export function formatHistoryTime(value: string | null | undefined): string {
   if (!value) {
     return "未知时间";

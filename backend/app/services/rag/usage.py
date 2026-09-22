@@ -11,6 +11,7 @@ def model_snapshot(model: RuntimeModelConfig) -> RagModelSnapshot:
     return RagModelSnapshot(
         model_config_id=model.id, provider_name=model.provider_name, display_name=model.display_name,
         model_name=model.model_name, max_tokens=model.max_tokens, temperature=model.temperature,
+        context_window=model.context_window,
         timeout_seconds=model.timeout_seconds, currency=model.currency, price_input=model.input_price,
         price_output=model.output_price, price_cache_hit=model.cache_hit_price, price_cache_creation=model.cache_creation_price,
     )

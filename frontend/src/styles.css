@@ -591,6 +591,38 @@ a {
   padding: 18px;
 }
 
+.conversation-turn-list,
+.conversation-assessment {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+
+.conversation-turn {
+  border-top: 1px solid var(--border-color, #e2e8f0);
+  padding-top: 18px;
+  min-width: 0;
+}
+
+.conversation-question,
+.conversation-assessment blockquote {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.conversation-score-dimensions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 16px;
+  margin: 12px 0;
+}
+
+.conversation-score-dimensions > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .query-header {
   display: flex;
   align-items: flex-start;
@@ -1938,3 +1970,8 @@ button:disabled {
     width: 100%;
   }
 }
+
+.conversation-report-table { overflow-x: auto; margin: 12px 0; }
+.conversation-report-table table { border-collapse: collapse; width: 100%; text-align: left; }
+.conversation-report-table th, .conversation-report-table td { padding: 8px 12px; border-bottom: 1px solid var(--border-color, #e5e7eb); }
+.conversation-report-table th { white-space: nowrap; }

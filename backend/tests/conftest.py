@@ -39,7 +39,8 @@ def rag_test_database() -> dict[str, int]:
     if version == "20260612_01":
         command.upgrade(config, "20260705_03")
         version = "20260705_03"
-    if version == "20260705_03":
+    # 每次升级前建立本次独立对照记录，避免复用已被其他验收修改的历史最小 ID。
+    if version:
         with engine.begin() as connection:
             result = connection.execute(text(
                 "INSERT INTO evaluation_tasks(user_id,prompt,status,visibility) VALUES (0,'迁移保留原问题','completed','private')"
@@ -52,9 +53,7 @@ def rag_test_database() -> dict[str, int]:
                 "INSERT INTO evaluation_results(response_id,rule_score,final_score) VALUES (:id,8,7.85)"
             ), {"id": response.lastrowid})
     command.upgrade(config, "head")
-    with engine.connect() as connection:
-        legacy_id = connection.scalar(text("SELECT MIN(id) FROM evaluation_tasks WHERE prompt='迁移保留原问题'"))
-        assert legacy_id is not None
+    assert legacy_id > 0
     engine.dispose()
     return {"legacy_task_id": legacy_id}
 

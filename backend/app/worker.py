@@ -31,6 +31,29 @@ celery_app.conf.update(
 logger = logging.getLogger(__name__)
 
 
+async def _run_assessment(job_id: int) -> None:
+    """为本次 Worker 事件循环创建独立连接池并执行持久化评审。"""
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from app.services.multiturn.dispatch import run_assessment_job
+    engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+    try:
+        await run_assessment_job(async_sessionmaker(engine, expire_on_commit=False), job_id)
+    finally:
+        await engine.dispose()
+
+
+@celery_app.task(name="app.worker.run_conversation_assessment")
+def run_conversation_assessment(job_id: int) -> None:
+    """队列重复投递交由数据库认领防重，不自动重试收费请求。"""
+    if type(job_id) is not int or job_id <= 0:
+        logger.warning("多轮评分作业标识无效")
+        return
+    try:
+        asyncio.run(_run_assessment(job_id))
+    except Exception:
+        logger.warning("多轮评分执行中断，请检查数据库任务状态")
+
+
 async def _run_job(job_id: str) -> None:
     from qdrant_client import AsyncQdrantClient
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine

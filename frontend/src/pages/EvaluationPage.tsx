@@ -13,6 +13,7 @@ import type { EvaluationTaskPayload, EvaluationVisibility, FeedbackType } from "
 import { useTodayTokenUsage } from "../features/evaluation/useTodayTokenUsage";
 import { useResponseGridMotion } from "../animations/pageMotion";
 import { ModelResponseCard } from "../components/ModelResponseCard";
+import { ConversationPanel } from "../components/ConversationPanel";
 import { useAuth } from "../features/auth/AuthContext";
 import {
   applyFeedbackResult,
@@ -336,6 +337,16 @@ export function EvaluationPage() {
           <p className="form-hint warning">LLM 评审需要至少保留一个未参与本次测评的空闲模型。</p>
         ) : null}
       </section>
+
+      <ConversationPanel
+        availableModels={availableModels}
+        selectedModelIds={selectedModelIds}
+        judgeModelId={enableJudge ? judgeModelId : null}
+        enableThinking={enableThinking}
+        visibility={visibility}
+        disabled={loading || modelConfigLoading}
+        onUsageChange={loadTokenUsage}
+      />
 
       <AlertMessage message={modelConfigErrorMessage} tone="warning" />
       <AlertMessage message={tokenUsageErrorMessage} tone="warning" />
